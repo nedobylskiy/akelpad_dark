@@ -737,6 +737,15 @@ void PaintDarkMenuBar(HWND hWnd)
   hBackground=CreateSolidBrush(RGB(37, 37, 37));
   hSelected=CreateSolidBrush(RGB(67, 67, 67));
   FillRect(hDC, &menuBar.rcBar, hBackground);
+  {
+    RECT rcDivider=menuBar.rcBar;
+    HBRUSH hDivider=CreateSolidBrush(RGB(70, 70, 70));
+
+    rcDivider.top=menuBar.rcBar.bottom;
+    rcDivider.bottom=rcDivider.top + 2;
+    FillRect(hDC, &rcDivider, hDivider);
+    DeleteObject(hDivider);
+  }
   hFont=(HFONT)GetStockObject(DEFAULT_GUI_FONT);
   hOldFont=(HFONT)SelectObject(hDC, hFont);
   SetBkMode(hDC, TRANSPARENT);
@@ -8162,7 +8171,14 @@ LRESULT CALLBACK NewButtonDrawProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         GetClientRect(hWnd, &rcButton);
 
         //Draw edge
-        if ((dwMouseCapture & MSC_BUTTONPRESS) && bMousePush)
+        if (IsDarkTheme())
+        {
+          HBRUSH hEdge=CreateSolidBrush(((dwMouseCapture & MSC_BUTTONPRESS) && bMousePush)?
+                                        RGB(105, 105, 105):RGB(73, 73, 73));
+          FrameRect(hDC, &rcButton, hEdge);
+          DeleteObject(hEdge);
+        }
+        else if ((dwMouseCapture & MSC_BUTTONPRESS) && bMousePush)
         {
           DrawEdge(hDC, &rcButton, EDGE_SUNKEN, BF_RECT);
         }

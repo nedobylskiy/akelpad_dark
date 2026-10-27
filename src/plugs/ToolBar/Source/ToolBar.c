@@ -1086,6 +1086,8 @@ LRESULT CALLBACK ToolbarBGProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
 
 LRESULT CALLBACK NewToolbarProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+  LRESULT lResult;
+
   if (uMsg == WM_PAINT)
   {
     if (bNewComctl32 && hStackToolbar.nSepRows && hRowListStack.nElements != 1)
@@ -1129,7 +1131,53 @@ LRESULT CALLBACK NewToolbarProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     ViewItemCode(lpButton);
     return 0;
   }
-  return CallWindowProcWide(lpOldToolbarProc, hWnd, uMsg, wParam, lParam);
+  lResult=CallWindowProcWide(lpOldToolbarProc, hWnd, uMsg, wParam, lParam);
+  if (uMsg == WM_PAINT && SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0))
+  {
+    HDC hDC=GetDC(hWnd);
+    HBRUSH hBackground=CreateSolidBrush(RGB(37, 37, 37));
+    HBRUSH hLine=CreateSolidBrush(RGB(72, 72, 72));
+    int nCount=(int)SendMessage(hWnd, TB_BUTTONCOUNT, 0, 0);
+    int i;
+
+    for (i=0; i < nCount; ++i)
+    {
+      TBBUTTON button;
+      RECT rc;
+
+      if (!SendMessage(hWnd, TB_GETBUTTON, i, (LPARAM)&button) ||
+          !SendMessage(hWnd, TB_GETITEMRECT, i, (LPARAM)&rc)) continue;
+      if (button.fsStyle & TBSTYLE_SEP)
+      {
+        RECT rcLine=rc;
+        FillRect(hDC, &rc, hBackground);
+        if (rc.right - rc.left > rc.bottom - rc.top)
+        {
+          rcLine.top=(rc.top + rc.bottom) / 2;
+          rcLine.bottom=rcLine.top + 1;
+          rcLine.left+=4;
+          rcLine.right-=4;
+        }
+        else
+        {
+          rcLine.left=(rc.left + rc.right) / 2;
+          rcLine.right=rcLine.left + 1;
+          rcLine.top+=5;
+          rcLine.bottom-=5;
+        }
+        if (rcLine.right > rcLine.left && rcLine.bottom > rcLine.top)
+          FillRect(hDC, &rcLine, hLine);
+      }
+      else if (button.fsStyle & TBSTYLE_DROPDOWN)
+      {
+        FrameRect(hDC, &rc, hLine);
+      }
+    }
+    DeleteObject(hBackground);
+    DeleteObject(hLine);
+    ReleaseDC(hWnd, hDC);
+  }
+  return lResult;
 }
 
 VOID CALLBACK PaintTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime)
@@ -1178,11 +1226,11 @@ BOOL CreateToolbarWindow()
   if (nToolbarSide == TBSIDE_LEFT)
     dwStyle=CCS_VERT|CCS_NODIVIDER|CCS_NOPARENTALIGN|CCS_NORESIZE;
   else if (nToolbarSide == TBSIDE_TOP)
-    dwStyle=CCS_TOP|/*CCS_NODIVIDER|*/CCS_NOPARENTALIGN|CCS_NORESIZE;
+    dwStyle=CCS_TOP|(SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0)?CCS_NODIVIDER:0)|CCS_NOPARENTALIGN|CCS_NORESIZE;
   else if (nToolbarSide == TBSIDE_RIGHT)
     dwStyle=CCS_VERT|CCS_NODIVIDER|CCS_NOPARENTALIGN|CCS_NORESIZE;
   else if (nToolbarSide == TBSIDE_BOTTOM)
-    dwStyle=CCS_BOTTOM|/*CCS_NODIVIDER|*/CCS_NOPARENTALIGN|CCS_NORESIZE;
+    dwStyle=CCS_BOTTOM|(SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0)?CCS_NODIVIDER:0)|CCS_NOPARENTALIGN|CCS_NORESIZE;
 
   hToolbar=CreateWindowExWide(0,
                         L"ToolbarWindow32",

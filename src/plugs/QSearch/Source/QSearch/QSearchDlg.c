@@ -3003,8 +3003,29 @@ static void ThemeQSearchControls(HWND hDlg)
 {
     HMODULE hUxTheme = LoadLibraryA("uxtheme.dll");
     QSEARCHTHEME theme;
-    if ( !hUxTheme ) return;
+    HWND hEdit = GetDlgItem(hDlg, IDC_ED_FINDTEXT);
+    HWND hCombo = GetDlgItem(hDlg, IDC_CB_FINDTEXT);
+    HWND controls[2];
+    int i;
+
+    controls[0] = hEdit;
+    controls[1] = hCombo;
     theme.bDark = (BOOL) SendMessage(g_Plugin.hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0);
+    for ( i = 0; i < 2; ++i )
+    {
+        if ( controls[i] )
+        {
+            LONG_PTR oldStyle = GetWindowLongPtrW(controls[i], GWL_EXSTYLE);
+            LONG_PTR newStyle = theme.bDark ? oldStyle & ~WS_EX_CLIENTEDGE : oldStyle | WS_EX_CLIENTEDGE;
+            if ( newStyle != oldStyle )
+            {
+                SetWindowLongPtrW(controls[i], GWL_EXSTYLE, newStyle);
+                SetWindowPos(controls[i], NULL, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+            }
+        }
+    }
+    if ( !hUxTheme ) return;
     theme.pSetWindowTheme = (void *) GetProcAddress(hUxTheme, "SetWindowTheme");
     theme.pAllowDarkModeForWindow = (void *) GetProcAddress(hUxTheme, MAKEINTRESOURCEA(133));
     EnumChildWindows(hDlg, ThemeQSearchChild, (LPARAM) &theme);
