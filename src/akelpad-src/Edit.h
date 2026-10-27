@@ -421,6 +421,7 @@ typedef struct {
   DWORD dwTabOptionsMDI;
 
   //Settings dialog
+  DWORD dwThemeMode;
   RECT rcPropCurrentDialog;
   wchar_t wszExecuteCommand[BUFFER_SIZE];
   wchar_t wszExecuteDirectory[MAX_PATH];
@@ -489,6 +490,11 @@ typedef struct {
   RECT rcMainWindowRestored;
   DWORD dwMdiStyle;
 } MAINOPTIONS;
+
+//Interface theme preference.
+#define THEME_LIGHT   0
+#define THEME_DARK    1
+#define THEME_SYSTEM  2
 
 typedef struct {
   HANDLE hHandle;
@@ -985,6 +991,7 @@ void RecodeTextW(FRAMEDATA *lpFrame, HWND hWndPreview, DWORD dwFlags, int *nCode
 BOOL CALLBACK RecodeDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 BOOL CALLBACK ColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+void ApplyEditorTheme();
 void FillComboboxThemes(HWND hWnd);
 COLORTHEME* StackThemeAdd(STACKCOLORTHEME *hStack, const wchar_t *wpName, AECOLORS *aec, const wchar_t *wpFile, int nBkImageAlpha, int nIndex);
 COLORTHEME* StackThemeGetByName(STACKCOLORTHEME *hStack, const wchar_t *wpName);

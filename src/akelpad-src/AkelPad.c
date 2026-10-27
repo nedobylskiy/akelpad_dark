@@ -579,6 +579,55 @@ DWORD (WINAPI *SetSecurityInfoPtr)(HANDLE, SE_OBJECT_TYPE, SECURITY_INFORMATION,
 DWORD (WINAPI *SetEntriesInAclWPtr)(ULONG, PEXPLICIT_ACCESSW, PACL, PACL *)=NULL;
 BOOL (WINAPI *ShellExecuteExWPtr)(LPSHELLEXECUTEINFOW)=NULL;
 
+BOOL IsDarkTheme()
+{
+  HKEY hKey;
+  DWORD dwLight=1;
+  DWORD dwSize=sizeof(dwLight);
+
+  if (moCur.dwThemeMode == THEME_DARK) return TRUE;
+  if (moCur.dwThemeMode == THEME_LIGHT) return FALSE;
+  if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+  {
+    RegQueryValueExW(hKey, L"AppsUseLightTheme", NULL, NULL, (LPBYTE)&dwLight, &dwSize);
+    RegCloseKey(hKey);
+  }
+  return dwLight == 0;
+}
+
+void ApplyInterfaceTheme()
+{
+  HMODULE hDwm;
+  HMODULE hUxTheme;
+  HRESULT (WINAPI *pDwmSetWindowAttribute)(HWND, DWORD, LPCVOID, DWORD);
+  HRESULT (WINAPI *pSetWindowTheme)(HWND, LPCWSTR, LPCWSTR);
+  BOOL bDark=IsDarkTheme();
+
+  if (!hMainWnd) return;
+  if (hDwm=LoadLibraryA("dwmapi.dll"))
+  {
+    pDwmSetWindowAttribute=(void *)GetProcAddress(hDwm, "DwmSetWindowAttribute");
+    if (pDwmSetWindowAttribute)
+    {
+      if (FAILED(pDwmSetWindowAttribute(hMainWnd, 20, &bDark, sizeof(bDark))))
+        pDwmSetWindowAttribute(hMainWnd, 19, &bDark, sizeof(bDark));
+    }
+    FreeLibrary(hDwm);
+  }
+  if (hUxTheme=LoadLibraryA("uxtheme.dll"))
+  {
+    pSetWindowTheme=(void *)GetProcAddress(hUxTheme, "SetWindowTheme");
+    if (pSetWindowTheme)
+    {
+      if (hStatus) pSetWindowTheme(hStatus, bDark?L"DarkMode_Explorer":NULL, NULL);
+      if (hTab) pSetWindowTheme(hTab, bDark?L"DarkMode_Explorer":NULL, NULL);
+    }
+    FreeLibrary(hUxTheme);
+  }
+  ApplyEditorTheme();
+  RedrawWindow(hMainWnd, NULL, NULL, RDW_INVALIDATE|RDW_ALLCHILDREN|RDW_FRAME);
+}
+
 //GCC
 #ifdef __GNUC__
 int main()
@@ -783,6 +832,7 @@ EXTERN_C int WINAPI _tWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPTSTR lpCmd
 
   //Set default options before reading from registry/ini
   xmemset(&moInit, 0, sizeof(MAINOPTIONS));
+  moInit.dwThemeMode=THEME_SYSTEM;
   xmemset(&fdInit, 0, sizeof(FRAMEDATA));
   xmemset(&aecDefault, 0, sizeof(AECOLORS));
 
@@ -1921,6 +1971,8 @@ LRESULT CALLBACK MainProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
           if (bOldComctl32) EnableMenuItem(hMainMenu, IDM_WINDOW_TABTYPE_FLATBUTTONS, MF_GRAYED);
           DoWindowTabSwitch(moCur.dwTabOptionsMDI, TRUE);
         }
+
+        ApplyInterfaceTheme();
 
         //PreShow
         nms.dwStyle=&moCur.dwMainStyle;
@@ -4872,6 +4924,11 @@ LRESULT CALLBACK MainProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         return TRUE;
       }
     }
+  }
+  else if (uMsg == WM_SETTINGCHANGE)
+  {
+    if (moCur.dwThemeMode == THEME_SYSTEM)
+      ApplyInterfaceTheme();
   }
   else if (uMsg == WM_ERASEBKGND)
   {

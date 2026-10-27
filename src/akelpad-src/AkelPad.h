@@ -23,6 +23,8 @@
 
 void _WinMain();
 void WinMainCleanUp();
+BOOL IsDarkTheme();
+void ApplyInterfaceTheme();
 LRESULT CALLBACK CommonMainProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK MainProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 BOOL CALLBACK EditParentMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, LRESULT *lResult);
