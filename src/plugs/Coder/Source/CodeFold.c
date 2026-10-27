@@ -53,6 +53,7 @@ HCURSOR hCursorArrow=NULL;
 DWORD dwFoldListTextColor;
 DWORD dwFoldListBkColor;
 HBRUSH hFoldFilterBkBrush=NULL;
+HBRUSH hCodeFoldDarkBrush=NULL;
 DWORD dwFoldFilterTextColor=(DWORD)-1;
 DWORD dwFoldFilterBkColor=(DWORD)-1;
 DWORD dwCurrentCollapse=699;  //"Ctrl+="
@@ -314,6 +315,61 @@ void DestroyDock(HWND hWndDock, DWORD dwType)
   SendMessage(hWndDock, WM_COMMAND, IDC_CODEFOLD_CLOSE, dwType);
 }
 
+BOOL IsCodeFoldDark()
+{
+  return (BOOL)SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0);
+}
+
+void SetCodeFoldControlBorder(HWND hWnd, int nStyleIndex, LONG_PTR dwBorder, BOOL bDark)
+{
+  LONG_PTR dwStyle;
+  LONG_PTR dwNewStyle;
+
+  if (!hWnd) return;
+  dwStyle=GetWindowLongPtrWide(hWnd, nStyleIndex);
+  dwNewStyle=bDark?(dwStyle & ~dwBorder):(dwStyle | dwBorder);
+  if (dwStyle != dwNewStyle)
+  {
+    SetWindowLongPtrWide(hWnd, nStyleIndex, dwNewStyle);
+    SetWindowPos(hWnd, NULL, 0, 0, 0, 0,
+                 SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_FRAMECHANGED);
+  }
+}
+
+void ApplyCodeFoldDockTheme(HWND hDlg)
+{
+  BOOL bDark=IsCodeFoldDark();
+  HWND hTitle=GetDlgItem(hDlg, IDC_CODEFOLD_TITLETEXT);
+  HMODULE hUxTheme;
+  HRESULT (WINAPI *pSetWindowTheme)(HWND, LPCWSTR, LPCWSTR);
+
+  if (bDark && !hCodeFoldDarkBrush)
+    hCodeFoldDarkBrush=CreateSolidBrush(RGB(37, 37, 37));
+  SetCodeFoldControlBorder(hTitle, GWL_STYLE, SS_SUNKEN, bDark);
+  SetCodeFoldControlBorder(hWndCodeFoldList, GWL_STYLE, WS_BORDER, bDark);
+  SetCodeFoldControlBorder(hWndCodeFoldFilter, GWL_EXSTYLE, WS_EX_CLIENTEDGE, bDark);
+  if (hUxTheme=LoadLibraryA("uxtheme.dll"))
+  {
+    pSetWindowTheme=(void *)GetProcAddress(hUxTheme, "SetWindowTheme");
+    if (pSetWindowTheme)
+      pSetWindowTheme(hWndCodeFoldList, bDark?L"DarkMode_Explorer":NULL, NULL);
+    FreeLibrary(hUxTheme);
+  }
+  if (bDark)
+  {
+    SendMessage(hWndCodeFoldList, TVM_SETBKCOLOR, 0, RGB(37, 37, 37));
+    SendMessage(hWndCodeFoldList, TVM_SETTEXTCOLOR, 0, RGB(225, 225, 225));
+    SendMessage(hWndCodeFoldList, TVM_SETLINECOLOR, 0, RGB(88, 88, 88));
+  }
+  else
+  {
+    SendMessage(hWndCodeFoldList, TVM_SETBKCOLOR, 0, (LPARAM)CLR_NONE);
+    SendMessage(hWndCodeFoldList, TVM_SETTEXTCOLOR, 0, (LPARAM)CLR_NONE);
+    SendMessage(hWndCodeFoldList, TVM_SETLINECOLOR, 0, (LPARAM)CLR_NONE);
+  }
+  RedrawWindow(hDlg, NULL, NULL, RDW_INVALIDATE|RDW_ALLCHILDREN|RDW_ERASE);
+}
+
 BOOL CALLBACK CodeFoldDockDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
   static HWND hWndTitleText;
@@ -337,6 +393,7 @@ BOOL CALLBACK CodeFoldDockDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
     hWndTitleText=GetDlgItem(hDlg, IDC_CODEFOLD_TITLETEXT);
     hWndTitleHide=GetDlgItem(hDlg, IDC_CODEFOLD_HIDE);
     hWndTitleClose=GetDlgItem(hDlg, IDC_CODEFOLD_CLOSE);
+    ApplyCodeFoldDockTheme(hDlg);
 
     hMenuLabel=CreatePopupMenu();
     AppendMenuWide(hMenuLabel, MF_STRING, IDM_CODEFOLD_SETUP, GetLangStringW(wLangModule, STRID_SETUP));
@@ -390,6 +447,27 @@ BOOL CALLBACK CodeFoldDockDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
 
     lpOldFilterProc=(WNDPROC)GetWindowLongPtrWide(hWndCodeFoldFilter, GWLP_WNDPROC);
     SetWindowLongPtrWide(hWndCodeFoldFilter, GWLP_WNDPROC, (UINT_PTR)NewFilterProc);
+  }
+  else if (uMsg == WM_THEMECHANGED)
+  {
+    ApplyCodeFoldDockTheme(hDlg);
+    if (lpCurrentFoldWindow)
+      SetActiveEdit(lpCurrentFoldWindow->hWndEdit, hWndCodeFoldList, 0);
+  }
+  else if (uMsg == WM_ERASEBKGND && IsCodeFoldDark())
+  {
+    RECT rc;
+
+    GetClientRect(hDlg, &rc);
+    FillRect((HDC)wParam, &rc, hCodeFoldDarkBrush);
+    return TRUE;
+  }
+  else if ((uMsg == WM_CTLCOLORSTATIC || uMsg == WM_CTLCOLORBTN) && IsCodeFoldDark())
+  {
+    SetBkMode((HDC)wParam, TRANSPARENT);
+    SetTextColor((HDC)wParam, RGB(225, 225, 225));
+    SetWindowLongPtrWide(hDlg, DWLP_MSGRESULT, (INT_PTR)hCodeFoldDarkBrush);
+    return (BOOL)(INT_PTR)hCodeFoldDarkBrush;
   }
   else if (uMsg == AKDLL_SETUP)
   {
@@ -738,6 +816,13 @@ BOOL CALLBACK CodeFoldDockDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lP
   {
     if (hWndCodeFoldFilter == (HWND)lParam)
     {
+      if (IsCodeFoldDark())
+      {
+        SetTextColor((HDC)wParam, RGB(225, 225, 225));
+        SetBkColor((HDC)wParam, RGB(37, 37, 37));
+        SetWindowLongPtrWide(hDlg, DWLP_MSGRESULT, (INT_PTR)hCodeFoldDarkBrush);
+        return (BOOL)(INT_PTR)hCodeFoldDarkBrush;
+      }
       if (hFoldFilterBkBrush)
       {
         if (dwFoldFilterTextColor != (DWORD)-1)
@@ -4102,6 +4187,11 @@ FOLDWINDOW* SetActiveEdit(HWND hWndEdit, HWND hWndTreeView, DWORD dwFlags)
             dwBk=dwFoldListBkColor;
           }
         }
+        if (IsCodeFoldDark())
+        {
+          dwText=RGB(225, 225, 225);
+          dwBk=RGB(37, 37, 37);
+        }
         if ((DWORD)SendMessage(hWndTreeView, TVM_GETTEXTCOLOR, 0, 0) != dwText)
           SendMessage(hWndTreeView, TVM_SETTEXTCOLOR, 0, (LPARAM)dwText);
         if ((DWORD)SendMessage(hWndTreeView, TVM_GETBKCOLOR, 0, 0) != dwBk)
@@ -5289,6 +5379,11 @@ void UninitCodeFold(DWORD dwFlags)
     if (dwFlags & INIT_CODEFOLD_WINDOWS)
     {
       StackFreeFoldWindows(&hFoldWindowsStack);
+    }
+    if (hCodeFoldDarkBrush)
+    {
+      DeleteObject(hCodeFoldDarkBrush);
+      hCodeFoldDarkBrush=NULL;
     }
   }
 }

@@ -199,6 +199,7 @@
 //  fraction  - space width as a fraction of the icon width (1/2, 1/3, 1/1, ...)
 //  thickness - bar thickness in pixels
 #define SEPARATOR2_ID             0xE002  //Unique command ID, must not clash with button IDs (1, 2, 3...)
+#define DARK_ROW_SEPARATOR_ID     0xE003
 #define SEPARATOR2_DEFAULT_NUM    1       //Default fraction numerator
 #define SEPARATOR2_DEFAULT_DEN    2       //Default fraction denominator
 #define SEPARATOR2_THICK_LARGE    4       //Default bar thickness for large and medium icons (48, 40)
@@ -963,6 +964,8 @@ LRESULT CALLBACK ToolbarBGProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
       }
       if (lpcd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT)
       {
+        if (lpcd->nmcd.dwItemSpec == DARK_ROW_SEPARATOR_ID)
+          return CDRF_SKIPDEFAULT;
         if (SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0) && !lpcd->nmcd.dwItemSpec)
         {
           RECT rcBar=lpcd->nmcd.rc;
@@ -2258,6 +2261,7 @@ void SetToolbarButtons(STACKTOOLBAR *hStack)
 
   for (lpButton=hStack->first; lpButton; lpButton=lpButton->next)
   {
+    TBBUTTON buttonToAdd;
     lpButton->nButtonWidth=sizeButtons.cx;
     if (lpButton->tbb.fsStyle & TBSTYLE_DROPDOWN)
       lpButton->nButtonWidth+=nArrorWidth;
@@ -2293,7 +2297,24 @@ void SetToolbarButtons(STACKTOOLBAR *hStack)
       lpButton->tbb.fsState|=TBSTATE_WRAP;
 
     nMaxRowWidth=max(nRowWidth, nMaxRowWidth);
-    SendMessage(hToolbar, TB_ADDBUTTONS, 1, (LPARAM)&lpButton->tbb);
+    buttonToAdd=lpButton->tbb;
+    if (SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0) &&
+        (buttonToAdd.fsStyle & TBSTYLE_SEP) && (buttonToAdd.fsState & TBSTATE_WRAP))
+    {
+      // A native wrapped separator draws a bright line across the whole row.
+      TBBUTTONINFOW tbi;
+
+      buttonToAdd.fsStyle=TBSTYLE_BUTTON;
+      buttonToAdd.idCommand=DARK_ROW_SEPARATOR_ID;
+      SendMessage(hToolbar, TB_ADDBUTTONS, 1, (LPARAM)&buttonToAdd);
+      xmemset(&tbi, 0, sizeof(tbi));
+      tbi.cbSize=sizeof(tbi);
+      tbi.dwMask=TBIF_SIZE|TBIF_BYINDEX;
+      tbi.cx=8;
+      SendMessage(hToolbar, TB_SETBUTTONINFOW,
+                  SendMessage(hToolbar, TB_BUTTONCOUNT, 0, 0) - 1, (LPARAM)&tbi);
+    }
+    else SendMessage(hToolbar, TB_ADDBUTTONS, 1, (LPARAM)&buttonToAdd);
 
     if (lpButton->tbb.idCommand == SEPARATOR2_ID)
     {
