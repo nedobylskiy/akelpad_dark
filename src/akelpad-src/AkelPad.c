@@ -574,6 +574,21 @@ WNDPROC lpOldTabProc;
 WNDPROC lpOldStatusProc;
 int nDarkMenuSelected=-1;
 
+#define WM_UAHDRAWMENU 0x0091
+#define WM_UAHDRAWMENUITEM 0x0092
+
+typedef struct {
+  HMENU hMenu;
+  HDC hDC;
+  DWORD dwFlags;
+} DARKUAHMENU;
+
+typedef struct {
+  DRAWITEMSTRUCT draw;
+  DARKUAHMENU menu;
+  int nPosition;
+} DARKUAHMENUITEM;
+
 //GetProcAddress
 HMONITOR (WINAPI *MonitorFromPointPtr)(POINT, DWORD);
 BOOL (WINAPI *GetMonitorInfoAPtr)(HMONITOR, LPMONITORINFO);
@@ -1916,6 +1931,47 @@ LRESULT CALLBACK CommonMainProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 
 LRESULT CALLBACK MainProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+  if (IsDarkTheme() && uMsg == WM_UAHDRAWMENU && lParam)
+  {
+    DARKUAHMENU *menu=(DARKUAHMENU *)lParam;
+    MENUBARINFO menuBar;
+    RECT rcWindow;
+    HBRUSH hBrush=CreateSolidBrush(RGB(37, 37, 37));
+
+    menuBar.cbSize=sizeof(menuBar);
+    if (GetMenuBarInfo(hWnd, OBJID_MENU, 0, &menuBar))
+    {
+      GetWindowRect(hWnd, &rcWindow);
+      OffsetRect(&menuBar.rcBar, -rcWindow.left, -rcWindow.top);
+      FillRect(menu->hDC, &menuBar.rcBar, hBrush);
+    }
+    DeleteObject(hBrush);
+    return 0;
+  }
+  if (IsDarkTheme() && uMsg == WM_UAHDRAWMENUITEM && lParam)
+  {
+    DARKUAHMENUITEM *item=(DARKUAHMENUITEM *)lParam;
+    wchar_t wszText[256];
+    HBRUSH hBrush;
+    HFONT hFont=(HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    HFONT hOldFont;
+    COLORREF crBackground=(item->draw.itemState & (ODS_SELECTED|ODS_HOTLIGHT))?
+                          RGB(67, 67, 67):RGB(37, 37, 37);
+    UINT uTextFlags=DT_SINGLELINE|DT_VCENTER|DT_CENTER;
+
+    hBrush=CreateSolidBrush(crBackground);
+    FillRect(item->draw.hDC, &item->draw.rcItem, hBrush);
+    DeleteObject(hBrush);
+    if (item->draw.itemState & ODS_NOACCEL) uTextFlags|=DT_HIDEPREFIX;
+    SetBkMode(item->draw.hDC, TRANSPARENT);
+    SetTextColor(item->draw.hDC, (item->draw.itemState & (ODS_DISABLED|ODS_GRAYED))?
+                 RGB(145, 145, 145):RGB(230, 230, 230));
+    hOldFont=(HFONT)SelectObject(item->draw.hDC, hFont);
+    if (GetMenuStringW(item->menu.hMenu, item->nPosition, wszText, 256, MF_BYPOSITION))
+      DrawTextW(item->draw.hDC, wszText, -1, &item->draw.rcItem, uTextFlags);
+    SelectObject(item->draw.hDC, hOldFont);
+    return 0;
+  }
   if (uMsg == WM_CREATE)
   {
     int *lpSBParts;

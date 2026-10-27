@@ -3139,6 +3139,12 @@ static LRESULT CALLBACK DarkQSearchComboProc(HWND hWnd, UINT uMsg, WPARAM wParam
         int middle;
 
         GetClientRect(hWnd, &rc);
+        {
+            RECT rcOuter = rc;
+            FrameRect(hDC, &rcOuter, border);
+            InflateRect(&rcOuter, -1, -1);
+            FrameRect(hDC, &rcOuter, border);
+        }
         rc.left = max(rc.left, rc.right - GetSystemMetrics(SM_CXVSCROLL));
         FillRect(hDC, &rc, background);
         FrameRect(hDC, &rc, border);

@@ -1173,6 +1173,21 @@ LRESULT CALLBACK NewToolbarProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         FrameRect(hDC, &rc, hLine);
       }
     }
+    // A wrapped separator also makes comctl32 draw a full-width light line.
+    for (i=0; i < nCount; ++i)
+    {
+      TBBUTTON button;
+      RECT rc;
+      RECT rcClient;
+
+      if (!SendMessage(hWnd, TB_GETBUTTON, i, (LPARAM)&button) ||
+          !(button.fsStyle & TBSTYLE_SEP) || !(button.fsState & TBSTATE_WRAP) ||
+          !SendMessage(hWnd, TB_GETITEMRECT, i, (LPARAM)&rc)) continue;
+      GetClientRect(hWnd, &rcClient);
+      rcClient.top=rc.bottom;
+      rcClient.bottom=min(rcClient.bottom, rc.bottom + 6);
+      if (rcClient.bottom > rcClient.top) FillRect(hDC, &rcClient, hBackground);
+    }
     DeleteObject(hBackground);
     DeleteObject(hLine);
     ReleaseDC(hWnd, hDC);

@@ -357,7 +357,9 @@ HANDLE CreateEditWindow(HWND hWndParent, HWND hWndEditPMDI)
 
   GetClientRect(hWndParent, &rcRect);
 
-  if (moCur.dwPaintOptions & PAINT_STATICEDGE)
+  if (IsDarkTheme())
+    cs.dwExStyle=0;
+  else if (moCur.dwPaintOptions & PAINT_STATICEDGE)
     cs.dwExStyle=WS_EX_STATICEDGE;
   else if (moCur.dwPaintOptions & PAINT_NOEDGE)
     cs.dwExStyle=0;
@@ -478,11 +480,29 @@ void SetInterfaceEditColors(HWND hWndEdit, const AECOLORS *aec)
 void ApplyEditorTheme()
 {
   FRAMEDATA *lpFrame;
+  DWORD dwEdgeStyle=0;
+
+  if (!IsDarkTheme())
+  {
+    if (moCur.dwPaintOptions & PAINT_STATICEDGE) dwEdgeStyle=WS_EX_STATICEDGE;
+    else if (!(moCur.dwPaintOptions & PAINT_NOEDGE)) dwEdgeStyle=WS_EX_CLIENTEDGE;
+  }
 
   for (lpFrame=hFramesStack.first; lpFrame; lpFrame=lpFrame->next)
   {
     if (nMDI != WMD_PMDI || lpFrame == lpFrameCurrent)
+    {
+      LONG_PTR dwStyle=GetWindowLongPtrW(lpFrame->ei.hWndEdit, GWL_EXSTYLE);
+      LONG_PTR dwNewStyle=(dwStyle & ~(WS_EX_CLIENTEDGE|WS_EX_STATICEDGE))|dwEdgeStyle;
+
+      if (dwStyle != dwNewStyle)
+      {
+        SetWindowLongPtrW(lpFrame->ei.hWndEdit, GWL_EXSTYLE, dwNewStyle);
+        SetWindowPos(lpFrame->ei.hWndEdit, NULL, 0, 0, 0, 0,
+                     SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_FRAMECHANGED);
+      }
       SetInterfaceEditColors(lpFrame->ei.hWndEdit, &lpFrame->aec);
+    }
   }
 }
 
