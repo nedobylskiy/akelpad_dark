@@ -3092,9 +3092,9 @@ static void SubclassQSearchButton(HWND hWnd)
 {
     WNDPROC oldProc;
     if ( !hWnd || GetPropW(hWnd, L"QSearchOriginalButtonProc") ) return;
-    oldProc = (WNDPROC) GetWindowLongPtrWide(hWnd, GWLP_WNDPROC);
+    oldProc = (WNDPROC) GetWindowLongPtrW(hWnd, GWLP_WNDPROC);
     if ( SetPropW(hWnd, L"QSearchOriginalButtonProc", (HANDLE) oldProc) )
-        SetWindowLongPtrWide(hWnd, GWLP_WNDPROC, (UINT_PTR) DarkQSearchButtonProc);
+        SetWindowLongPtrW(hWnd, GWLP_WNDPROC, (LONG_PTR) DarkQSearchButtonProc);
 }
 
 static LRESULT CALLBACK DarkQSearchComboProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -3139,9 +3139,9 @@ static void SubclassQSearchCombo(HWND hWnd)
 {
     WNDPROC oldProc;
     if ( !hWnd || GetPropW(hWnd, L"QSearchOriginalComboProc") ) return;
-    oldProc = (WNDPROC) GetWindowLongPtrWide(hWnd, GWLP_WNDPROC);
+    oldProc = (WNDPROC) GetWindowLongPtrW(hWnd, GWLP_WNDPROC);
     if ( SetPropW(hWnd, L"QSearchOriginalComboProc", (HANDLE) oldProc) )
-        SetWindowLongPtrWide(hWnd, GWLP_WNDPROC, (UINT_PTR) DarkQSearchComboProc);
+        SetWindowLongPtrW(hWnd, GWLP_WNDPROC, (LONG_PTR) DarkQSearchComboProc);
 }
 
 INT_PTR CALLBACK qsearchDlgProc(HWND hDlg,
