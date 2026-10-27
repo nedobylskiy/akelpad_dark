@@ -2983,6 +2983,194 @@ static void RedrawWindowByDx(HWND hWnd)
     }
 }
 
+typedef struct {
+    HRESULT (WINAPI *pSetWindowTheme)(HWND, LPCWSTR, LPCWSTR);
+    BOOL (WINAPI *pAllowDarkModeForWindow)(HWND, BOOL);
+    BOOL bDark;
+} QSEARCHTHEME;
+
+static BOOL CALLBACK ThemeQSearchChild(HWND hWnd, LPARAM lParam)
+{
+    QSEARCHTHEME *theme = (QSEARCHTHEME *) lParam;
+    if ( theme->pAllowDarkModeForWindow )
+        theme->pAllowDarkModeForWindow(hWnd, theme->bDark);
+    if ( theme->pSetWindowTheme )
+        theme->pSetWindowTheme(hWnd, theme->bDark ? L"DarkMode_Explorer" : NULL, NULL);
+    return TRUE;
+}
+
+static void ThemeQSearchControls(HWND hDlg)
+{
+    HMODULE hUxTheme = LoadLibraryA("uxtheme.dll");
+    QSEARCHTHEME theme;
+    HWND hEdit = GetDlgItem(hDlg, IDC_ED_FINDTEXT);
+    HWND hCombo = GetDlgItem(hDlg, IDC_CB_FINDTEXT);
+    HWND controls[2];
+    int i;
+
+    controls[0] = hEdit;
+    controls[1] = hCombo;
+    theme.bDark = (BOOL) SendMessage(g_Plugin.hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0);
+    for ( i = 0; i < 2; ++i )
+    {
+        if ( controls[i] )
+        {
+            LONG_PTR oldStyle = GetWindowLongPtrW(controls[i], GWL_EXSTYLE);
+            LONG_PTR newStyle = theme.bDark ? oldStyle & ~WS_EX_CLIENTEDGE : oldStyle | WS_EX_CLIENTEDGE;
+            if ( newStyle != oldStyle )
+            {
+                SetWindowLongPtrW(controls[i], GWL_EXSTYLE, newStyle);
+                SetWindowPos(controls[i], NULL, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+            }
+        }
+    }
+    if ( !hUxTheme ) return;
+    theme.pSetWindowTheme = (void *) GetProcAddress(hUxTheme, "SetWindowTheme");
+    theme.pAllowDarkModeForWindow = (void *) GetProcAddress(hUxTheme, MAKEINTRESOURCEA(133));
+    EnumChildWindows(hDlg, ThemeQSearchChild, (LPARAM) &theme);
+    FreeLibrary(hUxTheme);
+}
+
+static LRESULT CALLBACK DarkQSearchButtonProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    WNDPROC oldProc = (WNDPROC) GetPropW(hWnd, L"QSearchOriginalButtonProc");
+    if ( uMsg == WM_NCDESTROY )
+    {
+        LRESULT result = CallWindowProcW(oldProc, hWnd, uMsg, wParam, lParam);
+        RemovePropW(hWnd, L"QSearchOriginalButtonProc");
+        return result;
+    }
+    if ( uMsg == WM_THEMECHANGED ) InvalidateRect(hWnd, NULL, TRUE);
+    if ( SendMessage(g_Plugin.hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0) )
+    {
+        if ( uMsg == WM_ERASEBKGND ) return 1;
+        if ( uMsg == WM_PAINT )
+        {
+            PAINTSTRUCT ps;
+            HDC hDC = BeginPaint(hWnd, &ps);
+            RECT rc;
+            RECT rcText;
+            HFONT hFont = (HFONT) SendMessage(hWnd, WM_GETFONT, 0, 0);
+            HFONT hOldFont = hFont ? (HFONT) SelectObject(hDC, hFont) : NULL;
+            HBRUSH hBackground;
+            HBRUSH hBorder = CreateSolidBrush(RGB(95, 95, 95));
+            WCHAR text[128];
+            BOOL isCheck = (GetDlgCtrlID(hWnd) == IDC_CH_MATCHCASE ||
+                            GetDlgCtrlID(hWnd) == IDC_CH_WHOLEWORD ||
+                            GetDlgCtrlID(hWnd) == IDC_CH_HIGHLIGHTALL);
+            BOOL enabled = IsWindowEnabled(hWnd);
+
+            GetClientRect(hWnd, &rc);
+            hBackground = CreateSolidBrush(isCheck ? RGB(37, 37, 37) :
+                (SendMessage(hWnd, BM_GETSTATE, 0, 0) & BST_PUSHED) ? RGB(75, 75, 75) : RGB(54, 54, 54));
+            FillRect(hDC, &rc, hBackground);
+            SetBkMode(hDC, TRANSPARENT);
+            SetTextColor(hDC, enabled ? RGB(230, 230, 230) : RGB(130, 130, 130));
+            rcText = rc;
+            if ( isCheck )
+            {
+                RECT rcBox;
+                int side = min(12, rc.bottom - rc.top - 2);
+                rcBox.left = 0;
+                rcBox.top = (rc.bottom - side) / 2;
+                rcBox.right = rcBox.left + side;
+                rcBox.bottom = rcBox.top + side;
+                FrameRect(hDC, &rcBox, hBorder);
+                if ( SendMessage(hWnd, BM_GETCHECK, 0, 0) == BST_CHECKED )
+                {
+                    HPEN hPen = CreatePen(PS_SOLID, 2, enabled ? RGB(230, 230, 230) : RGB(130, 130, 130));
+                    HPEN hOldPen = (HPEN) SelectObject(hDC, hPen);
+                    MoveToEx(hDC, rcBox.left + 2, rcBox.top + side / 2, NULL);
+                    LineTo(hDC, rcBox.left + side / 2 - 1, rcBox.bottom - 3);
+                    LineTo(hDC, rcBox.right - 2, rcBox.top + 2);
+                    SelectObject(hDC, hOldPen);
+                    DeleteObject(hPen);
+                }
+                rcText.left = rcBox.right + 3;
+            }
+            else
+                FrameRect(hDC, &rc, hBorder);
+            GetWindowTextW(hWnd, text, 128);
+            DrawTextW(hDC, text, -1, &rcText,
+                DT_SINGLELINE | DT_VCENTER | (isCheck ? DT_LEFT : DT_CENTER));
+            if ( GetFocus() == hWnd )
+            {
+                InflateRect(&rcText, -2, -2);
+                DrawFocusRect(hDC, &rcText);
+            }
+            if ( hOldFont ) SelectObject(hDC, hOldFont);
+            DeleteObject(hBackground);
+            DeleteObject(hBorder);
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
+    }
+    return CallWindowProcW(oldProc, hWnd, uMsg, wParam, lParam);
+}
+
+static void SubclassQSearchButton(HWND hWnd)
+{
+    WNDPROC oldProc;
+    if ( !hWnd || GetPropW(hWnd, L"QSearchOriginalButtonProc") ) return;
+    oldProc = (WNDPROC) GetWindowLongPtrW(hWnd, GWLP_WNDPROC);
+    if ( SetPropW(hWnd, L"QSearchOriginalButtonProc", (HANDLE) oldProc) )
+        SetWindowLongPtrW(hWnd, GWLP_WNDPROC, (LONG_PTR) DarkQSearchButtonProc);
+}
+
+static LRESULT CALLBACK DarkQSearchComboProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    WNDPROC oldProc = (WNDPROC) GetPropW(hWnd, L"QSearchOriginalComboProc");
+    LRESULT result = CallWindowProcW(oldProc, hWnd, uMsg, wParam, lParam);
+    if ( uMsg == WM_NCDESTROY )
+    {
+        RemovePropW(hWnd, L"QSearchOriginalComboProc");
+        return result;
+    }
+    if ( uMsg == WM_THEMECHANGED ) InvalidateRect(hWnd, NULL, TRUE);
+    if ( uMsg == WM_PAINT && SendMessage(g_Plugin.hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0) )
+    {
+        HDC hDC = GetDC(hWnd);
+        RECT rc;
+        HBRUSH background = CreateSolidBrush(RGB(54, 54, 54));
+        HBRUSH border = CreateSolidBrush(RGB(95, 95, 95));
+        HPEN pen = CreatePen(PS_SOLID, 1, RGB(225, 225, 225));
+        HPEN oldPen;
+        int middle;
+
+        GetClientRect(hWnd, &rc);
+        {
+            RECT rcOuter = rc;
+            FrameRect(hDC, &rcOuter, border);
+            InflateRect(&rcOuter, -1, -1);
+            FrameRect(hDC, &rcOuter, border);
+        }
+        rc.left = max(rc.left, rc.right - GetSystemMetrics(SM_CXVSCROLL));
+        FillRect(hDC, &rc, background);
+        FrameRect(hDC, &rc, border);
+        oldPen = (HPEN) SelectObject(hDC, pen);
+        middle = (rc.left + rc.right) / 2;
+        MoveToEx(hDC, middle - 3, (rc.top + rc.bottom) / 2 - 1, NULL);
+        LineTo(hDC, middle, (rc.top + rc.bottom) / 2 + 2);
+        LineTo(hDC, middle + 4, (rc.top + rc.bottom) / 2 - 2);
+        SelectObject(hDC, oldPen);
+        DeleteObject(pen);
+        DeleteObject(background);
+        DeleteObject(border);
+        ReleaseDC(hWnd, hDC);
+    }
+    return result;
+}
+
+static void SubclassQSearchCombo(HWND hWnd)
+{
+    WNDPROC oldProc;
+    if ( !hWnd || GetPropW(hWnd, L"QSearchOriginalComboProc") ) return;
+    oldProc = (WNDPROC) GetWindowLongPtrW(hWnd, GWLP_WNDPROC);
+    if ( SetPropW(hWnd, L"QSearchOriginalComboProc", (HANDLE) oldProc) )
+        SetWindowLongPtrW(hWnd, GWLP_WNDPROC, (LONG_PTR) DarkQSearchComboProc);
+}
+
 INT_PTR CALLBACK qsearchDlgProc(HWND hDlg,
   UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
@@ -2991,6 +3179,8 @@ INT_PTR CALLBACK qsearchDlgProc(HWND hDlg,
     static HBRUSH hTextNotFoundBrush = NULL;
     static HBRUSH hTextNotRegExpBrush = NULL;
     static HBRUSH hTextEOFBrush = NULL;
+    static HBRUSH hDarkBackgroundBrush = NULL;
+    static HBRUSH hDarkEditBrush = NULL;
     //static BOOL   bHotKeyPressed = FALSE;
 
     static HWND hEdFindText = NULL;
@@ -3019,6 +3209,37 @@ INT_PTR CALLBACK qsearchDlgProc(HWND hDlg,
 
     switch ( uMsg )
     {
+        case WM_THEMECHANGED:
+        {
+            ThemeQSearchControls(hDlg);
+            RedrawWindow(hDlg, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE);
+            break;
+        }
+        case WM_ERASEBKGND:
+        {
+            if ( SendMessage(g_Plugin.hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0) )
+            {
+                RECT rc;
+                if ( !hDarkBackgroundBrush ) hDarkBackgroundBrush = CreateSolidBrush(RGB(37, 37, 37));
+                GetClientRect(hDlg, &rc);
+                FillRect((HDC) wParam, &rc, hDarkBackgroundBrush);
+                return 1;
+            }
+            break;
+        }
+        case WM_CTLCOLORDLG:
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLORBTN:
+        {
+            if ( SendMessage(g_Plugin.hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0) )
+            {
+                if ( !hDarkBackgroundBrush ) hDarkBackgroundBrush = CreateSolidBrush(RGB(37, 37, 37));
+                SetBkMode((HDC) wParam, TRANSPARENT);
+                SetTextColor((HDC) wParam, RGB(225, 225, 225));
+                return (INT_PTR) hDarkBackgroundBrush;
+            }
+            break;
+        }
         case WM_COMMAND:
         {
             unsigned int id = LOWORD(wParam);
@@ -3505,6 +3726,13 @@ INT_PTR CALLBACK qsearchDlgProc(HWND hDlg,
                         return (LRESULT) hTextNotRegExpBrush;
 
                     default:
+                        if ( SendMessage(g_Plugin.hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0) )
+                        {
+                            if ( !hDarkEditBrush ) hDarkEditBrush = CreateSolidBrush(RGB(48, 48, 48));
+                            SetTextColor((HDC) wParam, RGB(235, 235, 235));
+                            SetBkColor((HDC) wParam, RGB(48, 48, 48));
+                            return (INT_PTR) hDarkEditBrush;
+                        }
                         SetBkColor( (HDC) wParam, GetSysColor(nBkColor) );
                         return (LRESULT) GetSysColorBrush(nBkColor);
                 }
@@ -3889,6 +4117,8 @@ INT_PTR CALLBACK qsearchDlgProc(HWND hDlg,
         {
             HWND hDlgItm;
 
+            ThemeQSearchControls(hDlg);
+
             InitializeCriticalSection(&csFindAllTimerId);
 
             GetClientRect(hDlg, &rcDlg_0);
@@ -3903,6 +4133,14 @@ INT_PTR CALLBACK qsearchDlgProc(HWND hDlg,
             hChWholeWord = GetDlgItemAndRect(hDlg, IDC_CH_WHOLEWORD, &rcChWholeWord_0);
             hChHighlightAll = GetDlgItemAndRect(hDlg, IDC_CH_HIGHLIGHTALL, &rcChHighlightAll_0);
             hStInfo = GetDlgItemAndRect(hDlg, IDC_ST_INFO, &rcStInfo_0);
+
+            SubclassQSearchCombo(hCbFindText);
+            SubclassQSearchButton(hBtFindNext);
+            SubclassQSearchButton(hBtFindPrev);
+            SubclassQSearchButton(hBtFindAll);
+            SubclassQSearchButton(hChMatchCase);
+            SubclassQSearchButton(hChWholeWord);
+            SubclassQSearchButton(hChHighlightAll);
 
             g_QSearchDlg.bIsQSearchingRightNow = FALSE;
             g_QSearchDlg.bMouseJustLeavedFindEdit = FALSE;

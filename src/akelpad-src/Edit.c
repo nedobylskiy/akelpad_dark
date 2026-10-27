@@ -357,7 +357,9 @@ HANDLE CreateEditWindow(HWND hWndParent, HWND hWndEditPMDI)
 
   GetClientRect(hWndParent, &rcRect);
 
-  if (moCur.dwPaintOptions & PAINT_STATICEDGE)
+  if (IsDarkTheme())
+    cs.dwExStyle=0;
+  else if (moCur.dwPaintOptions & PAINT_STATICEDGE)
     cs.dwExStyle=WS_EX_STATICEDGE;
   else if (moCur.dwPaintOptions & PAINT_NOEDGE)
     cs.dwExStyle=0;
@@ -441,6 +443,67 @@ HANDLE CreateEditWindow(HWND hWndParent, HWND hWndEditPMDI)
     }
   }
   return hResult;
+}
+
+void SetInterfaceEditColors(HWND hWndEdit, const AECOLORS *aec)
+{
+  AECOLORS colors;
+
+  if (!hWndEdit) return;
+  if (!IsDarkTheme())
+  {
+    SendMessage(hWndEdit, AEM_SETCOLORS, 0, (LPARAM)aec);
+    return;
+  }
+
+  colors=*aec;
+  colors.dwFlags=AECLR_ALL;
+  colors.crCaret=RGB(230, 230, 230);
+  colors.crBasicText=RGB(220, 220, 220);
+  colors.crBasicBk=RGB(30, 30, 30);
+  colors.crSelText=RGB(255, 255, 255);
+  colors.crSelBk=RGB(54, 90, 130);
+  colors.crActiveLineText=RGB(220, 220, 220);
+  colors.crActiveLineBk=RGB(42, 42, 42);
+  colors.crUrlText=RGB(100, 170, 240);
+  colors.crActiveColumn=RGB(45, 45, 45);
+  colors.crColumnMarker=RGB(85, 85, 85);
+  colors.crUrlCursorText=RGB(140, 195, 255);
+  colors.crUrlVisitText=RGB(175, 140, 220);
+  colors.crActiveLineBorder=RGB(65, 65, 65);
+  colors.crAltLineText=RGB(220, 220, 220);
+  colors.crAltLineBk=RGB(35, 35, 35);
+  colors.crAltLineBorder=RGB(65, 65, 65);
+  SendMessage(hWndEdit, AEM_SETCOLORS, 0, (LPARAM)&colors);
+}
+
+void ApplyEditorTheme()
+{
+  FRAMEDATA *lpFrame;
+  DWORD dwEdgeStyle=0;
+
+  if (!IsDarkTheme())
+  {
+    if (moCur.dwPaintOptions & PAINT_STATICEDGE) dwEdgeStyle=WS_EX_STATICEDGE;
+    else if (!(moCur.dwPaintOptions & PAINT_NOEDGE)) dwEdgeStyle=WS_EX_CLIENTEDGE;
+  }
+
+  for (lpFrame=hFramesStack.first; lpFrame; lpFrame=lpFrame->next)
+  {
+    if (nMDI != WMD_PMDI || lpFrame == lpFrameCurrent)
+    {
+      LONG_PTR dwStyle=GetWindowLongPtrW(lpFrame->ei.hWndEdit, GWL_EXSTYLE);
+      LONG_PTR dwNewStyle=(dwStyle & ~(WS_EX_CLIENTEDGE|WS_EX_STATICEDGE))|dwEdgeStyle;
+
+      if (dwStyle != dwNewStyle)
+      {
+        SetWindowLongPtrW(lpFrame->ei.hWndEdit, GWL_EXSTYLE, dwNewStyle);
+        SetWindowPos(lpFrame->ei.hWndEdit, NULL, 0, 0, 0, 0,
+                     SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_FRAMECHANGED);
+      }
+      SetInterfaceEditColors(lpFrame->ei.hWndEdit, &lpFrame->aec);
+    }
+  }
 }
 
 //For WMD_PMDI required: lpFrame == lpFrameCurrent
@@ -527,7 +590,7 @@ void SetEditWindowSettings(FRAMEDATA *lpFrame)
   UpdateMappedPrintWidth(lpFrame);
 
   //Colors
-  SendMessage(lpFrame->ei.hWndEdit, AEM_SETCOLORS, 0, (LPARAM)&lpFrame->aec);
+  SetInterfaceEditColors(lpFrame->ei.hWndEdit, &lpFrame->aec);
   SetBkImage(lpFrame, lpFrame->wszBkImageFile, lpFrame->nBkImageAlpha);
 
   SendMessage(lpFrame->ei.hWndEdit, AEM_SETUNDOLIMIT, (WPARAM)lpFrame->nUndoLimit, 0);
@@ -3999,6 +4062,8 @@ HANDLE ReadOptions(MAINOPTIONS *mo, FRAMEDATA *fd, int nType, HANDLE hHandle)
       }
     }
     ReadOption(&oh, L"SettingsDialog", MOT_BINARY, &mo->rcPropCurrentDialog, sizeof(RECT));
+    ReadOption(&oh, L"ThemeMode", MOT_DWORD, &mo->dwThemeMode, sizeof(DWORD));
+    if (mo->dwThemeMode > THEME_SYSTEM) mo->dwThemeMode=THEME_SYSTEM;
     ReadOption(&oh, L"ExecuteCommand", MOT_STRING, mo->wszExecuteCommand, sizeof(mo->wszExecuteCommand));
     ReadOption(&oh, L"ExecuteDirectory", MOT_STRING, mo->wszExecuteDirectory, sizeof(mo->wszExecuteDirectory));
     ReadOption(&oh, L"DefaultCodepage", MOT_DWORD, &mo->nDefaultCodePage, sizeof(DWORD));
@@ -4310,6 +4375,8 @@ BOOL SaveOptions(MAINOPTIONS *mo, FRAMEDATA *fd, int nSaveSettings, BOOL bForceW
       goto Error;
   }
   if (!SaveOption(&oh, L"SettingsDialog", MOT_BINARY|MOT_MAINOFFSET, (void *)offsetof(MAINOPTIONS, rcPropCurrentDialog), sizeof(RECT)))
+    goto Error;
+  if (!SaveOption(&oh, L"ThemeMode", MOT_DWORD|MOT_MAINOFFSET, (void *)offsetof(MAINOPTIONS, dwThemeMode), sizeof(DWORD)))
     goto Error;
   if (!SaveOption(&oh, L"ExecuteCommand", MOT_STRING|MOT_MAINOFFSET, (void *)offsetof(MAINOPTIONS, wszExecuteCommand), BytesInString(mo->wszExecuteCommand)))
     goto Error;
@@ -13787,7 +13854,7 @@ BOOL CALLBACK ColorsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
         //Colors
         xmemcpy(&lpFrameCurrent->aec, &aecColorsDlg, sizeof(AECOLORS));
         lpFrameCurrent->aec.dwFlags=AECLR_ALL;
-        SendMessage(lpFrameCurrent->ei.hWndEdit, AEM_SETCOLORS, 0, (LPARAM)&lpFrameCurrent->aec);
+        SetInterfaceEditColors(lpFrameCurrent->ei.hWndEdit, &lpFrameCurrent->aec);
 
         //Background image
         SetBkImage(lpFrameCurrent, wszBkImageFileDlg, nBkImageAlphaDlg);
@@ -15423,6 +15490,7 @@ int CALLBACK PropSheetProc(HWND hDlg, UINT uMsg, LPARAM lParam)
   else if (uMsg == PSCB_INITIALIZED)
   {
     hWndPropertySheet=hDlg;
+    ApplyThemeToDialog(hDlg);
     hWndPropTab=(HWND)SendMessage(hDlg, PSM_GETTABCONTROL, 0, 0);
     hWndPropOK=GetDlgItem(hDlg, IDOK);
     hWndPropCancel=GetDlgItem(hDlg, IDCANCEL);
@@ -15443,6 +15511,12 @@ int CALLBACK PropSheetProc(HWND hDlg, UINT uMsg, LPARAM lParam)
 
 LRESULT CALLBACK NewPropProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+  HBRUSH hBrush;
+
+  if ((uMsg == WM_CTLCOLORDLG || uMsg == WM_CTLCOLORSTATIC ||
+       uMsg == WM_CTLCOLOREDIT || uMsg == WM_CTLCOLORLISTBOX ||
+       uMsg == WM_CTLCOLORBTN) && (hBrush=ThemeDialogBrush(uMsg, wParam)))
+    return (LRESULT)hBrush;
   if (bPropResize || uMsg == WM_PAINT)
   {
     ResizeDialogMessages(&rdsProp, &rcPropMinMaxDialog, &moCur.rcPropCurrentDialog, RDM_PAINTSIZEGRIP, hWnd, uMsg, wParam, lParam);
@@ -15477,8 +15551,11 @@ BOOL CALLBACK OptionsGeneralDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
   static HWND hWndNewFileNewLine;
   int i;
 
+  if (ThemeDialogMessage(hDlg, uMsg, wParam)) return TRUE;
+
   if (uMsg == WM_INITDIALOG)
   {
+    ApplyThemeToDialog(hDlg);
     hWndPropGeneral=hDlg;
     hWndCommand=GetDlgItem(hDlg, IDC_OPTIONS_EXECCOM);
     hWndDirectory=GetDlgItem(hDlg, IDC_OPTIONS_EXECDIR);
@@ -15823,9 +15900,11 @@ BOOL CALLBACK OptionsRegistryDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
   static HWND hWndAssociatePrint;
   BOOL bState;
 
+  if (ThemeDialogMessage(hDlg, uMsg, wParam)) return TRUE;
   if (uMsg == WM_INITDIALOG)
   {
     hWndPropRegistry=hDlg;
+    ApplyThemeToDialog(hDlg);
     hWndSaveSettingsRegistry=GetDlgItem(hDlg, IDC_OPTIONS_SAVESETTINGS_REGISTRY);
     hWndSaveSettingsINI=GetDlgItem(hDlg, IDC_OPTIONS_SAVESETTINGS_INI);
     hWndSaveHistoryRegistry=GetDlgItem(hDlg, IDC_OPTIONS_SAVEHISTORY_REGISTRY);
@@ -16100,9 +16179,11 @@ BOOL CALLBACK OptionsEditor1DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
   static HWND hWndLineGapSpin;
   BOOL bState;
 
+  if (ThemeDialogMessage(hDlg, uMsg, wParam)) return TRUE;
   if (uMsg == WM_INITDIALOG)
   {
     hWndPropEditor1=hDlg;
+    ApplyThemeToDialog(hDlg);
     hWndTabSize=GetDlgItem(hDlg, IDC_OPTIONS_TABSIZE);
     hWndTabSizeSpin=GetDlgItem(hDlg, IDC_OPTIONS_TABSIZE_SPIN);
     hWndTabSizeSpaces=GetDlgItem(hDlg, IDC_OPTIONS_TABSIZE_SPACES);
@@ -16315,9 +16396,11 @@ BOOL CALLBACK OptionsEditor2DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
   static HWND hWndWrapDelimiters;
   BOOL bState;
 
+  if (ThemeDialogMessage(hDlg, uMsg, wParam)) return TRUE;
   if (uMsg == WM_INITDIALOG)
   {
     hWndPropEditor2=hDlg;
+    ApplyThemeToDialog(hDlg);
     hWndMarginSelection=GetDlgItem(hDlg, IDC_OPTIONS_MOUSELEFTMARGIN);
     hWndMouseRichEdit=GetDlgItem(hDlg, IDC_OPTIONS_MOUSERICHEDIT);
     hWndMouseDragging=GetDlgItem(hDlg, IDC_OPTIONS_MOUSEDRAGGING);
@@ -16522,6 +16605,7 @@ BOOL CALLBACK OptionsEditor2DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
 
 BOOL CALLBACK OptionsAdvancedDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+  static HWND hWndTheme;
   static HWND hWndDefaultSaveExt;
   static HWND hWndSwitchKeybLayout;
   static HWND hWndRememberKeybLayout;
@@ -16537,9 +16621,11 @@ BOOL CALLBACK OptionsAdvancedDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
   static HWND hWndModelessSavePos;
   BOOL bState;
 
+  if (ThemeDialogMessage(hDlg, uMsg, wParam)) return TRUE;
   if (uMsg == WM_INITDIALOG)
   {
     hWndPropAdvanced=hDlg;
+    ApplyThemeToDialog(hDlg);
     hWndDefaultSaveExt=GetDlgItem(hDlg, IDC_OPTIONS_DEFAULT_SAVE_EXT);
     hWndSwitchKeybLayout=GetDlgItem(hDlg, IDC_OPTIONS_SWITCH_KEYBLAYOUT);
     hWndRememberKeybLayout=GetDlgItem(hDlg, IDC_OPTIONS_REMEMBER_KEYBLAYOUT);
@@ -16553,6 +16639,20 @@ BOOL CALLBACK OptionsAdvancedDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
     hWndCycleSearch=GetDlgItem(hDlg, IDC_OPTIONS_CYCLESEARCH);
     hWndCycleSearchPrompt=GetDlgItem(hDlg, IDC_OPTIONS_CYCLESEARCHPROMPT);
     hWndModelessSavePos=GetDlgItem(hDlg, IDC_OPTIONS_MODELESSSAVEPOS);
+    hWndTheme=GetDlgItem(hDlg, IDC_OPTIONS_THEME);
+    if (!xstrcmpiW(moCur.wszLangModule, L"Russian.dll"))
+    {
+      ComboBox_AddStringWide(hWndTheme, L"\u0421\u0432\u0435\u0442\u043b\u0430\u044f");
+      ComboBox_AddStringWide(hWndTheme, L"\u0422\u0451\u043c\u043d\u0430\u044f");
+      ComboBox_AddStringWide(hWndTheme, L"\u0421\u0438\u0441\u0442\u0435\u043c\u0430");
+    }
+    else
+    {
+      ComboBox_AddStringWide(hWndTheme, L"Light");
+      ComboBox_AddStringWide(hWndTheme, L"Dark");
+      ComboBox_AddStringWide(hWndTheme, L"System");
+    }
+    SendMessage(hWndTheme, CB_SETCURSEL, moCur.dwThemeMode, 0);
 
     if (moCur.dwKeybLayoutOptions & KLO_SWITCHLAYOUT)
       SendMessage(hWndSwitchKeybLayout, BM_SETCHECK, BST_CHECKED, 0);
@@ -16600,6 +16700,12 @@ BOOL CALLBACK OptionsAdvancedDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
     }
     else if (((NMHDR *)lParam)->code == (UINT)PSN_APPLY)
     {
+      DWORD dwThemeMode=(DWORD)SendMessage(hWndTheme, CB_GETCURSEL, 0, 0);
+      if (dwThemeMode <= THEME_SYSTEM && moCur.dwThemeMode != dwThemeMode)
+      {
+        moCur.dwThemeMode=dwThemeMode;
+        ApplyInterfaceTheme();
+      }
       //Default save extention
       GetWindowTextWide(hWndDefaultSaveExt, moCur.wszDefaultSaveExt, MAX_PATH);
 
@@ -21668,6 +21774,7 @@ BOOL SetFrameInfo(FRAMEDATA *lpFrame, int nType, UINT_PTR dwData)
         lpFrame->aec.dwFlags=aec->dwFlags;
         SendMessage(lpFrame->ei.hWndEdit, AEM_GETCOLORS, 0, (LPARAM)&lpFrame->aec);
         lpFrame->aec.dwFlags=AECLR_ALL;
+        SetInterfaceEditColors(lpFrame->ei.hWndEdit, &lpFrame->aec);
         return TRUE;
       }
       break;

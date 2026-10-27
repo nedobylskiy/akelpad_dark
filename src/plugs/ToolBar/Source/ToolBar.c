@@ -199,6 +199,7 @@
 //  fraction  - space width as a fraction of the icon width (1/2, 1/3, 1/1, ...)
 //  thickness - bar thickness in pixels
 #define SEPARATOR2_ID             0xE002  //Unique command ID, must not clash with button IDs (1, 2, 3...)
+#define DARK_ROW_SEPARATOR_ID     0xE003
 #define SEPARATOR2_DEFAULT_NUM    1       //Default fraction numerator
 #define SEPARATOR2_DEFAULT_DEN    2       //Default fraction denominator
 #define SEPARATOR2_THICK_LARGE    4       //Default bar thickness for large and medium icons (48, 40)
@@ -897,8 +898,11 @@ void CALLBACK NewMainProcRet(CWPRETSTRUCT *cwprs)
 
 LRESULT CALLBACK ToolbarBGProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+  static BOOL bThemeRecreateQueued=FALSE;
+
   if (uMsg == AKDLL_RECREATE)
   {
+    bThemeRecreateQueued=FALSE;
     DestroyToolbarWindow(FALSE);
     CreateToolbarWindow();
     SendMessage(hMainWnd, AKD_RESIZE, 0, 0);
@@ -916,7 +920,27 @@ LRESULT CALLBACK ToolbarBGProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
   }
   else if (uMsg == WM_ERASEBKGND)
   {
+    if (SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0))
+    {
+      RECT rc;
+      HBRUSH hBrush=CreateSolidBrush(RGB(37, 37, 37));
+
+      GetClientRect(hWnd, &rc);
+      FillRect((HDC)wParam, &rc, hBrush);
+      DeleteObject(hBrush);
+      return 1;
+    }
     return 0;
+  }
+  else if (uMsg == WM_THEMECHANGED)
+  {
+    InvalidateRect(hWnd, NULL, TRUE);
+    if (hToolbar) InvalidateRect(hToolbar, NULL, TRUE);
+    if (!bThemeRecreateQueued)
+    {
+      bThemeRecreateQueued=TRUE;
+      PostMessage(hWnd, AKDLL_RECREATE, 0, 0);
+    }
   }
   else if (uMsg == WM_NOTIFY)
   {
@@ -926,9 +950,36 @@ LRESULT CALLBACK ToolbarBGProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
       LPNMTBCUSTOMDRAW lpcd=(LPNMTBCUSTOMDRAW)lParam;
 
       if (lpcd->nmcd.dwDrawStage == CDDS_PREPAINT)
+      {
+        if (SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0))
+        {
+          RECT rc;
+          HBRUSH hBrush=CreateSolidBrush(RGB(37, 37, 37));
+
+          GetClientRect(hToolbar, &rc);
+          FillRect(lpcd->nmcd.hdc, &rc, hBrush);
+          DeleteObject(hBrush);
+        }
         return CDRF_NOTIFYITEMDRAW;
+      }
       if (lpcd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT)
       {
+        if (lpcd->nmcd.dwItemSpec == DARK_ROW_SEPARATOR_ID)
+          return CDRF_SKIPDEFAULT;
+        if (SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0) && !lpcd->nmcd.dwItemSpec)
+        {
+          RECT rcBar=lpcd->nmcd.rc;
+          HBRUSH hBrush=CreateSolidBrush(RGB(72, 72, 72));
+          int x=(rcBar.left + rcBar.right) / 2;
+
+          rcBar.left=x;
+          rcBar.right=x + 1;
+          rcBar.top+=5;
+          rcBar.bottom-=5;
+          if (rcBar.bottom > rcBar.top) FillRect(lpcd->nmcd.hdc, &rcBar, hBrush);
+          DeleteObject(hBrush);
+          return CDRF_SKIPDEFAULT;
+        }
         if (lpcd->nmcd.dwItemSpec == SEPARATOR2_ID)
         {
           //Bar is centred in the space, as tall as the icons and vertically centred
@@ -956,6 +1007,21 @@ LRESULT CALLBACK ToolbarBGProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
             DeleteObject(hBrush);
           }
           return CDRF_SKIPDEFAULT;
+        }
+        if (SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0))
+        {
+          HBRUSH hBrush;
+          COLORREF crBackground=(lpcd->nmcd.uItemState & (CDIS_HOT|CDIS_SELECTED|CDIS_CHECKED))?
+                                RGB(67, 67, 67):RGB(37, 37, 37);
+
+          hBrush=CreateSolidBrush(crBackground);
+          FillRect(lpcd->nmcd.hdc, &lpcd->nmcd.rc, hBrush);
+          DeleteObject(hBrush);
+          lpcd->clrText=RGB(225, 225, 225);
+          lpcd->clrTextHighlight=RGB(255, 255, 255);
+          lpcd->clrBtnFace=crBackground;
+          lpcd->clrBtnHighlight=RGB(80, 80, 80);
+          return TBCDRF_NOBACKGROUND|TBCDRF_NOEDGES|TBCDRF_NOETCHEDEFFECT;
         }
       }
       return CDRF_DODEFAULT;
@@ -1023,6 +1089,8 @@ LRESULT CALLBACK ToolbarBGProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
 
 LRESULT CALLBACK NewToolbarProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+  LRESULT lResult;
+
   if (uMsg == WM_PAINT)
   {
     if (bNewComctl32 && hStackToolbar.nSepRows && hRowListStack.nElements != 1)
@@ -1066,7 +1134,68 @@ LRESULT CALLBACK NewToolbarProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     ViewItemCode(lpButton);
     return 0;
   }
-  return CallWindowProcWide(lpOldToolbarProc, hWnd, uMsg, wParam, lParam);
+  lResult=CallWindowProcWide(lpOldToolbarProc, hWnd, uMsg, wParam, lParam);
+  if (uMsg == WM_PAINT && SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0))
+  {
+    HDC hDC=GetDC(hWnd);
+    HBRUSH hBackground=CreateSolidBrush(RGB(37, 37, 37));
+    HBRUSH hLine=CreateSolidBrush(RGB(72, 72, 72));
+    int nCount=(int)SendMessage(hWnd, TB_BUTTONCOUNT, 0, 0);
+    int i;
+
+    for (i=0; i < nCount; ++i)
+    {
+      TBBUTTON button;
+      RECT rc;
+
+      if (!SendMessage(hWnd, TB_GETBUTTON, i, (LPARAM)&button) ||
+          !SendMessage(hWnd, TB_GETITEMRECT, i, (LPARAM)&rc)) continue;
+      if (button.fsStyle & TBSTYLE_SEP)
+      {
+        RECT rcLine=rc;
+        FillRect(hDC, &rc, hBackground);
+        if (rc.right - rc.left > rc.bottom - rc.top)
+        {
+          rcLine.top=(rc.top + rc.bottom) / 2;
+          rcLine.bottom=rcLine.top + 1;
+          rcLine.left+=4;
+          rcLine.right-=4;
+        }
+        else
+        {
+          rcLine.left=(rc.left + rc.right) / 2;
+          rcLine.right=rcLine.left + 1;
+          rcLine.top+=5;
+          rcLine.bottom-=5;
+        }
+        if (rcLine.right > rcLine.left && rcLine.bottom > rcLine.top)
+          FillRect(hDC, &rcLine, hLine);
+      }
+      else if (button.fsStyle & TBSTYLE_DROPDOWN)
+      {
+        FrameRect(hDC, &rc, hLine);
+      }
+    }
+    // A wrapped separator also makes comctl32 draw a full-width light line.
+    for (i=0; i < nCount; ++i)
+    {
+      TBBUTTON button;
+      RECT rc;
+      RECT rcClient;
+
+      if (!SendMessage(hWnd, TB_GETBUTTON, i, (LPARAM)&button) ||
+          !(button.fsStyle & TBSTYLE_SEP) || !(button.fsState & TBSTATE_WRAP) ||
+          !SendMessage(hWnd, TB_GETITEMRECT, i, (LPARAM)&rc)) continue;
+      GetClientRect(hWnd, &rcClient);
+      rcClient.top=rc.bottom;
+      rcClient.bottom=min(rcClient.bottom, rc.bottom + 6);
+      if (rcClient.bottom > rcClient.top) FillRect(hDC, &rcClient, hBackground);
+    }
+    DeleteObject(hBackground);
+    DeleteObject(hLine);
+    ReleaseDC(hWnd, hDC);
+  }
+  return lResult;
 }
 
 VOID CALLBACK PaintTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime)
@@ -1115,11 +1244,11 @@ BOOL CreateToolbarWindow()
   if (nToolbarSide == TBSIDE_LEFT)
     dwStyle=CCS_VERT|CCS_NODIVIDER|CCS_NOPARENTALIGN|CCS_NORESIZE;
   else if (nToolbarSide == TBSIDE_TOP)
-    dwStyle=CCS_TOP|/*CCS_NODIVIDER|*/CCS_NOPARENTALIGN|CCS_NORESIZE;
+    dwStyle=CCS_TOP|(SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0)?CCS_NODIVIDER:0)|CCS_NOPARENTALIGN|CCS_NORESIZE;
   else if (nToolbarSide == TBSIDE_RIGHT)
     dwStyle=CCS_VERT|CCS_NODIVIDER|CCS_NOPARENTALIGN|CCS_NORESIZE;
   else if (nToolbarSide == TBSIDE_BOTTOM)
-    dwStyle=CCS_BOTTOM|/*CCS_NODIVIDER|*/CCS_NOPARENTALIGN|CCS_NORESIZE;
+    dwStyle=CCS_BOTTOM|(SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0)?CCS_NODIVIDER:0)|CCS_NOPARENTALIGN|CCS_NORESIZE;
 
   hToolbar=CreateWindowExWide(0,
                         L"ToolbarWindow32",
@@ -1146,6 +1275,62 @@ BOOL CreateToolbarWindow()
   SetToolbarButtons(&hStackToolbar);
   UpdateToolbar(&hStackToolbar);
   return bResult;
+}
+
+// Invert only neutral icon pixels.  This removes a white icon matte without
+// changing the colours of the artwork, and keeps the original alpha and mask.
+HICON CreateDarkToolbarIcon(HICON hIcon)
+{
+  ICONINFO icon;
+  BITMAP bitmap;
+  BITMAPINFO info;
+  BYTE *pixels=NULL;
+  BYTE *mask=NULL;
+  HDC hDC=NULL;
+  HICON hDarkIcon=NULL;
+  DWORD count;
+  DWORD i;
+
+  if (!GetIconInfo(hIcon, &icon)) return NULL;
+  if (!icon.hbmColor || !icon.hbmMask ||
+      !GetObjectA(icon.hbmColor, sizeof(bitmap), &bitmap)) goto Finish;
+  count=(DWORD)bitmap.bmWidth * (DWORD)bitmap.bmHeight;
+  pixels=(BYTE *)GlobalAlloc(GPTR, count * 4);
+  mask=(BYTE *)GlobalAlloc(GPTR, count * 4);
+  if (!pixels || !mask) goto Finish;
+  xmemset(&info, 0, sizeof(info));
+  info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
+  info.bmiHeader.biWidth=bitmap.bmWidth;
+  info.bmiHeader.biHeight=bitmap.bmHeight;
+  info.bmiHeader.biPlanes=1;
+  info.bmiHeader.biBitCount=32;
+  info.bmiHeader.biCompression=BI_RGB;
+  if (!(hDC=GetDC(NULL))) goto Finish;
+  if (!GetDIBits(hDC, icon.hbmColor, 0, bitmap.bmHeight, pixels, &info, DIB_RGB_COLORS) ||
+      !GetDIBits(hDC, icon.hbmMask, 0, bitmap.bmHeight, mask, &info, DIB_RGB_COLORS)) goto Finish;
+  for (i=0; i < count; ++i)
+  {
+    BYTE *pixel=pixels + i * 4;
+    BYTE red=pixel[2];
+    BYTE green=pixel[1];
+    BYTE blue=pixel[0];
+    BYTE minimum=min(red, min(green, blue));
+    BYTE maximum=max(red, max(green, blue));
+    BYTE value;
+
+    if (mask[i * 4] || maximum - minimum > 20) continue;
+    value=(BYTE)(37 + (255 - ((int)red + green + blue) / 3) * 193 / 255);
+    pixel[0]=pixel[1]=pixel[2]=value;
+  }
+  if (!SetDIBits(hDC, icon.hbmColor, 0, bitmap.bmHeight, pixels, &info, DIB_RGB_COLORS)) goto Finish;
+  hDarkIcon=CreateIconIndirect(&icon);
+Finish:
+  if (hDC) ReleaseDC(NULL, hDC);
+  if (pixels) GlobalFree(pixels);
+  if (mask) GlobalFree(mask);
+  if (icon.hbmColor) DeleteObject(icon.hbmColor);
+  if (icon.hbmMask) DeleteObject(icon.hbmMask);
+  return hDarkIcon;
 }
 
 BOOL CreateToolbarData(STACKTOOLBAR *hStack, const wchar_t *wpText)
@@ -1222,12 +1407,14 @@ BOOL CreateToolbarData(STACKTOOLBAR *hStack, const wchar_t *wpText)
       sizeIcon.cy=32 /*GetSystemMetrics(SM_CYSMICON)*/;
     }
     hStack->hImageList=ImageList_Create(sizeIcon.cx, sizeIcon.cy, (nIconsBit == 16?ILC_COLOR16:ILC_COLOR32)|ILC_MASK, 0, 0);
-    ImageList_SetBkColor(hStack->hImageList, GetSysColor(COLOR_BTNFACE));
+    ImageList_SetBkColor(hStack->hImageList,
+                         SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0)?CLR_NONE:GetSysColor(COLOR_BTNFACE));
 
     if (nGrayedIcons == GI_PLUGIN)
     {
       hStack->hDisabledImageList=ImageList_Create(sizeIcon.cx, sizeIcon.cy, (nIconsBit == 16?ILC_COLOR16:ILC_COLOR32)|ILC_MASK, 0, 0);
-      ImageList_SetBkColor(hStack->hDisabledImageList, GetSysColor(COLOR_BTNFACE));
+      ImageList_SetBkColor(hStack->hDisabledImageList,
+                           SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0)?CLR_NONE:GetSysColor(COLOR_BTNFACE));
     }
 
     //Rows
@@ -1682,6 +1869,14 @@ BOOL CreateToolbarData(STACKTOOLBAR *hStack, const wchar_t *wpText)
                     }
                   }
                 }
+                if (SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0))
+                {
+                  if (hAdjustIcon=CreateDarkToolbarIcon(hIcon))
+                  {
+                    DestroyIcon(hIcon);
+                    hIcon=hAdjustIcon;
+                  }
+                }
                 ImageList_AddIcon(hStack->hImageList, hIcon);
                 if (hStack->hDisabledImageList)
                 {
@@ -2066,6 +2261,7 @@ void SetToolbarButtons(STACKTOOLBAR *hStack)
 
   for (lpButton=hStack->first; lpButton; lpButton=lpButton->next)
   {
+    TBBUTTON buttonToAdd;
     lpButton->nButtonWidth=sizeButtons.cx;
     if (lpButton->tbb.fsStyle & TBSTYLE_DROPDOWN)
       lpButton->nButtonWidth+=nArrorWidth;
@@ -2101,7 +2297,24 @@ void SetToolbarButtons(STACKTOOLBAR *hStack)
       lpButton->tbb.fsState|=TBSTATE_WRAP;
 
     nMaxRowWidth=max(nRowWidth, nMaxRowWidth);
-    SendMessage(hToolbar, TB_ADDBUTTONS, 1, (LPARAM)&lpButton->tbb);
+    buttonToAdd=lpButton->tbb;
+    if (SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0) &&
+        (buttonToAdd.fsStyle & TBSTYLE_SEP) && (buttonToAdd.fsState & TBSTATE_WRAP))
+    {
+      // A native wrapped separator draws a bright line across the whole row.
+      TBBUTTONINFOW tbi;
+
+      buttonToAdd.fsStyle=TBSTYLE_BUTTON;
+      buttonToAdd.idCommand=DARK_ROW_SEPARATOR_ID;
+      SendMessage(hToolbar, TB_ADDBUTTONS, 1, (LPARAM)&buttonToAdd);
+      xmemset(&tbi, 0, sizeof(tbi));
+      tbi.cbSize=sizeof(tbi);
+      tbi.dwMask=TBIF_SIZE|TBIF_BYINDEX;
+      tbi.cx=8;
+      SendMessage(hToolbar, TB_SETBUTTONINFOW,
+                  SendMessage(hToolbar, TB_BUTTONCOUNT, 0, 0) - 1, (LPARAM)&tbi);
+    }
+    else SendMessage(hToolbar, TB_ADDBUTTONS, 1, (LPARAM)&buttonToAdd);
 
     if (lpButton->tbb.idCommand == SEPARATOR2_ID)
     {

@@ -571,6 +571,23 @@ DWORD dwMdiFrameActivating=0;
 RECT rcMdiListMinMaxDialog={221, 463, 0, 0};
 WNDPROC lpOldMdiClientProc;
 WNDPROC lpOldTabProc;
+WNDPROC lpOldStatusProc;
+int nDarkMenuSelected=-1;
+
+#define WM_UAHDRAWMENU 0x0091
+#define WM_UAHDRAWMENUITEM 0x0092
+
+typedef struct {
+  HMENU hMenu;
+  HDC hDC;
+  DWORD dwFlags;
+} DARKUAHMENU;
+
+typedef struct {
+  DRAWITEMSTRUCT draw;
+  DARKUAHMENU menu;
+  int nPosition;
+} DARKUAHMENUITEM;
 
 //GetProcAddress
 HMONITOR (WINAPI *MonitorFromPointPtr)(POINT, DWORD);
@@ -578,6 +595,258 @@ BOOL (WINAPI *GetMonitorInfoAPtr)(HMONITOR, LPMONITORINFO);
 DWORD (WINAPI *SetSecurityInfoPtr)(HANDLE, SE_OBJECT_TYPE, SECURITY_INFORMATION, PSID, PSID, PACL, PACL)=NULL;
 DWORD (WINAPI *SetEntriesInAclWPtr)(ULONG, PEXPLICIT_ACCESSW, PACL, PACL *)=NULL;
 BOOL (WINAPI *ShellExecuteExWPtr)(LPSHELLEXECUTEINFOW)=NULL;
+
+BOOL IsDarkTheme()
+{
+  HKEY hKey;
+  DWORD dwLight=1;
+  DWORD dwSize=sizeof(dwLight);
+
+  if (moCur.dwThemeMode == THEME_DARK) return TRUE;
+  if (moCur.dwThemeMode == THEME_LIGHT) return FALSE;
+  if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+  {
+    RegQueryValueExW(hKey, L"AppsUseLightTheme", NULL, NULL, (LPBYTE)&dwLight, &dwSize);
+    RegCloseKey(hKey);
+  }
+  return dwLight == 0;
+}
+
+BOOL SupportsNativeDarkMode()
+{
+  HMODULE hNtDll;
+  LONG (WINAPI *pRtlGetVersion)(OSVERSIONINFOW *);
+  OSVERSIONINFOW version;
+
+  //The dark-mode exports are available starting with Windows 10 1903.
+  hNtDll=GetModuleHandleA("ntdll.dll");
+  if (!hNtDll) return FALSE;
+  pRtlGetVersion=(void *)GetProcAddress(hNtDll, "RtlGetVersion");
+  if (!pRtlGetVersion) return FALSE;
+  xmemset(&version, 0, sizeof(version));
+  version.dwOSVersionInfoSize=sizeof(version);
+  if (pRtlGetVersion(&version) || version.dwMajorVersion < 10 || version.dwBuildNumber < 18362)
+    return FALSE;
+  return TRUE;
+}
+
+void ApplyNativeAppTheme(BOOL bDark)
+{
+  HMODULE hUxTheme;
+  int (WINAPI *pSetPreferredAppMode)(int);
+  void (WINAPI *pFlushMenuThemes)(void);
+
+  if (!SupportsNativeDarkMode()) return;
+
+  if (hUxTheme=LoadLibraryA("uxtheme.dll"))
+  {
+    pSetPreferredAppMode=(void *)GetProcAddress(hUxTheme, MAKEINTRESOURCEA(135));
+    pFlushMenuThemes=(void *)GetProcAddress(hUxTheme, MAKEINTRESOURCEA(136));
+    if (pSetPreferredAppMode) pSetPreferredAppMode(bDark?2:3);
+    if (pFlushMenuThemes) pFlushMenuThemes();
+    FreeLibrary(hUxTheme);
+  }
+}
+
+typedef struct {
+  HRESULT (WINAPI *pSetWindowTheme)(HWND, LPCWSTR, LPCWSTR);
+  BOOL (WINAPI *pAllowDarkModeForWindow)(HWND, BOOL);
+  BOOL bDark;
+} THEMEWINDOWFUNCTIONS;
+
+BOOL CALLBACK ThemeChildWindowProc(HWND hWnd, LPARAM lParam)
+{
+  THEMEWINDOWFUNCTIONS *functions=(THEMEWINDOWFUNCTIONS *)lParam;
+
+  if (functions->pAllowDarkModeForWindow)
+    functions->pAllowDarkModeForWindow(hWnd, functions->bDark);
+  if (functions->pSetWindowTheme)
+    functions->pSetWindowTheme(hWnd, functions->bDark?L"DarkMode_Explorer":NULL, NULL);
+  return TRUE;
+}
+
+void ApplyThemeToDialog(HWND hDlg)
+{
+  HMODULE hUxTheme;
+  HMODULE hDwm;
+  THEMEWINDOWFUNCTIONS functions;
+  HRESULT (WINAPI *pDwmSetWindowAttribute)(HWND, DWORD, LPCVOID, DWORD);
+
+  if (!hDlg) return;
+  functions.bDark=IsDarkTheme();
+  if (hUxTheme=LoadLibraryA("uxtheme.dll"))
+  {
+    functions.pSetWindowTheme=(void *)GetProcAddress(hUxTheme, "SetWindowTheme");
+    functions.pAllowDarkModeForWindow=SupportsNativeDarkMode()?(void *)GetProcAddress(hUxTheme, MAKEINTRESOURCEA(133)):NULL;
+    ThemeChildWindowProc(hDlg, (LPARAM)&functions);
+    EnumChildWindows(hDlg, ThemeChildWindowProc, (LPARAM)&functions);
+    FreeLibrary(hUxTheme);
+  }
+  if (hDwm=LoadLibraryA("dwmapi.dll"))
+  {
+    pDwmSetWindowAttribute=(void *)GetProcAddress(hDwm, "DwmSetWindowAttribute");
+    if (pDwmSetWindowAttribute)
+      pDwmSetWindowAttribute(hDlg, 20, &functions.bDark, sizeof(functions.bDark));
+    FreeLibrary(hDwm);
+  }
+  RedrawWindow(hDlg, NULL, NULL, RDW_INVALIDATE|RDW_ALLCHILDREN|RDW_FRAME);
+}
+
+HBRUSH ThemeDialogBrush(UINT uMsg, WPARAM wParam)
+{
+  static HBRUSH hBackground=NULL;
+  static HBRUSH hControl=NULL;
+  HDC hDC=(HDC)wParam;
+
+  if (!IsDarkTheme()) return NULL;
+  if (!hBackground) hBackground=CreateSolidBrush(RGB(32, 32, 32));
+  if (!hControl) hControl=CreateSolidBrush(RGB(45, 45, 45));
+  if (uMsg == WM_CTLCOLORDLG) return hBackground;
+  SetTextColor(hDC, RGB(230, 230, 230));
+  if (uMsg == WM_CTLCOLOREDIT || uMsg == WM_CTLCOLORLISTBOX)
+  {
+    SetBkColor(hDC, RGB(45, 45, 45));
+    return hControl;
+  }
+  SetBkMode(hDC, TRANSPARENT);
+  return hBackground;
+}
+
+BOOL ThemeDialogMessage(HWND hDlg, UINT uMsg, WPARAM wParam)
+{
+  HBRUSH hBrush;
+
+  if (uMsg != WM_CTLCOLORDLG && uMsg != WM_CTLCOLORSTATIC &&
+      uMsg != WM_CTLCOLOREDIT && uMsg != WM_CTLCOLORLISTBOX &&
+      uMsg != WM_CTLCOLORBTN)
+    return FALSE;
+  if (!(hBrush=ThemeDialogBrush(uMsg, wParam))) return FALSE;
+  SetWindowLongPtrWide(hDlg, DWLP_MSGRESULT, (UINT_PTR)hBrush);
+  return TRUE;
+}
+
+BOOL CALLBACK NotifyChildThemeChanged(HWND hWnd, LPARAM lParam)
+{
+  PostMessage(hWnd, WM_THEMECHANGED, 0, 0);
+  return TRUE;
+}
+
+void PaintDarkMenuBar(HWND hWnd)
+{
+  MENUBARINFO menuBar;
+  RECT rcWindow;
+  HDC hDC;
+  HBRUSH hBackground;
+  HBRUSH hSelected;
+  HFONT hFont;
+  HFONT hOldFont;
+  int nCount;
+  int i;
+
+  if (!IsDarkTheme() || !hMainMenu) return;
+  menuBar.cbSize=sizeof(menuBar);
+  if (!GetMenuBarInfo(hWnd, OBJID_MENU, 0, &menuBar)) return;
+  if (!(hDC=GetWindowDC(hWnd))) return;
+  GetWindowRect(hWnd, &rcWindow);
+  OffsetRect(&menuBar.rcBar, -rcWindow.left, -rcWindow.top);
+  hBackground=CreateSolidBrush(RGB(37, 37, 37));
+  hSelected=CreateSolidBrush(RGB(67, 67, 67));
+  FillRect(hDC, &menuBar.rcBar, hBackground);
+  {
+    RECT rcDivider=menuBar.rcBar;
+    HBRUSH hDivider=CreateSolidBrush(RGB(70, 70, 70));
+
+    rcDivider.top=menuBar.rcBar.bottom;
+    rcDivider.bottom=rcDivider.top + 2;
+    FillRect(hDC, &rcDivider, hDivider);
+    DeleteObject(hDivider);
+  }
+  hFont=(HFONT)GetStockObject(DEFAULT_GUI_FONT);
+  hOldFont=(HFONT)SelectObject(hDC, hFont);
+  SetBkMode(hDC, TRANSPARENT);
+  SetTextColor(hDC, RGB(230, 230, 230));
+  nCount=GetMenuItemCount(hMainMenu);
+  for (i=0; i < nCount; ++i)
+  {
+    RECT rcItem;
+    wchar_t wszText[256];
+
+    if (!GetMenuItemRect(hWnd, hMainMenu, i, &rcItem)) continue;
+    OffsetRect(&rcItem, -rcWindow.left, -rcWindow.top);
+    if (i == nDarkMenuSelected) FillRect(hDC, &rcItem, hSelected);
+    if (GetMenuStringW(hMainMenu, i, wszText, 256, MF_BYPOSITION))
+      DrawTextW(hDC, wszText, -1, &rcItem, DT_SINGLELINE|DT_VCENTER|DT_CENTER);
+  }
+  SelectObject(hDC, hOldFont);
+  DeleteObject(hBackground);
+  DeleteObject(hSelected);
+  ReleaseDC(hWnd, hDC);
+}
+
+void ApplyInterfaceTheme()
+{
+  HMODULE hDwm;
+  HMODULE hUxTheme;
+  HRESULT (WINAPI *pDwmSetWindowAttribute)(HWND, DWORD, LPCVOID, DWORD);
+  HRESULT (WINAPI *pSetWindowTheme)(HWND, LPCWSTR, LPCWSTR);
+  BOOL (WINAPI *pAllowDarkModeForWindow)(HWND, BOOL);
+  BOOL bDark=IsDarkTheme();
+
+  if (!hMainWnd) return;
+  ApplyNativeAppTheme(bDark);
+  if (hDwm=LoadLibraryA("dwmapi.dll"))
+  {
+    pDwmSetWindowAttribute=(void *)GetProcAddress(hDwm, "DwmSetWindowAttribute");
+    if (pDwmSetWindowAttribute)
+    {
+      if (FAILED(pDwmSetWindowAttribute(hMainWnd, 20, &bDark, sizeof(bDark))))
+        pDwmSetWindowAttribute(hMainWnd, 19, &bDark, sizeof(bDark));
+    }
+    FreeLibrary(hDwm);
+  }
+  if (hUxTheme=LoadLibraryA("uxtheme.dll"))
+  {
+    THEMEWINDOWFUNCTIONS functions;
+
+    pAllowDarkModeForWindow=(void *)GetProcAddress(hUxTheme, MAKEINTRESOURCEA(133));
+    if (SupportsNativeDarkMode() && pAllowDarkModeForWindow)
+    {
+      pAllowDarkModeForWindow(hMainWnd, bDark);
+      if (hStatus) pAllowDarkModeForWindow(hStatus, bDark);
+      if (hTab) pAllowDarkModeForWindow(hTab, bDark);
+    }
+    pSetWindowTheme=(void *)GetProcAddress(hUxTheme, "SetWindowTheme");
+    if (pSetWindowTheme)
+    {
+      if (hStatus) pSetWindowTheme(hStatus, bDark?L"DarkMode_Explorer":NULL, NULL);
+      if (hTab) pSetWindowTheme(hTab, bDark?L"DarkMode_Explorer":NULL, NULL);
+    }
+    functions.pAllowDarkModeForWindow=SupportsNativeDarkMode()?pAllowDarkModeForWindow:NULL;
+    functions.pSetWindowTheme=pSetWindowTheme;
+    functions.bDark=bDark;
+    EnumChildWindows(hMainWnd, ThemeChildWindowProc, (LPARAM)&functions);
+    FreeLibrary(hUxTheme);
+  }
+  ApplyEditorTheme();
+  if (hWndPropertySheet) ApplyThemeToDialog(hWndPropertySheet);
+  EnumChildWindows(hMainWnd, NotifyChildThemeChanged, 0);
+  DrawMenuBar(hMainWnd);
+  PaintDarkMenuBar(hMainWnd);
+  RedrawWindow(hMainWnd, NULL, NULL, RDW_INVALIDATE|RDW_ALLCHILDREN|RDW_FRAME);
+}
+
+BOOL PaintDarkBackground(HWND hWnd, HDC hDC)
+{
+  RECT rc;
+  HBRUSH hBrush;
+
+  if (!IsDarkTheme()) return FALSE;
+  GetClientRect(hWnd, &rc);
+  hBrush=CreateSolidBrush(RGB(30, 30, 30));
+  FillRect(hDC, &rc, hBrush);
+  DeleteObject(hBrush);
+  return TRUE;
+}
 
 //GCC
 #ifdef __GNUC__
@@ -783,6 +1052,7 @@ EXTERN_C int WINAPI _tWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPTSTR lpCmd
 
   //Set default options before reading from registry/ini
   xmemset(&moInit, 0, sizeof(MAINOPTIONS));
+  moInit.dwThemeMode=THEME_SYSTEM;
   xmemset(&fdInit, 0, sizeof(FRAMEDATA));
   xmemset(&aecDefault, 0, sizeof(AECOLORS));
 
@@ -1131,6 +1401,7 @@ EXTERN_C int WINAPI _tWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPTSTR lpCmd
 
   //Copy initial options
   xmemcpy(&moCur, &moInit, sizeof(MAINOPTIONS));
+  ApplyNativeAppTheme(IsDarkTheme());
 
   //Get common controls version
   GetFileVersionA("comctl32.dll", &nMajor, &nMinor, &nRelease, &nBuild, NULL);
@@ -1649,11 +1920,58 @@ LRESULT CALLBACK CommonMainProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     cwprs.hwnd=hWnd;
     lpfnMainProcRet(&cwprs);
   }
+  if (uMsg == WM_MENUSELECT && (HMENU)lParam == hMainMenu && (HIWORD(wParam) & MF_POPUP))
+    nDarkMenuSelected=LOWORD(wParam);
+  else if (uMsg == WM_EXITMENULOOP)
+    nDarkMenuSelected=-1;
+  if (uMsg == WM_NCPAINT || uMsg == WM_MENUSELECT || uMsg == WM_EXITMENULOOP)
+    PaintDarkMenuBar(hWnd);
   return lResult;
 }
 
 LRESULT CALLBACK MainProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+  if (IsDarkTheme() && uMsg == WM_UAHDRAWMENU && lParam)
+  {
+    DARKUAHMENU *menu=(DARKUAHMENU *)lParam;
+    MENUBARINFO menuBar;
+    RECT rcWindow;
+    HBRUSH hBrush=CreateSolidBrush(RGB(37, 37, 37));
+
+    menuBar.cbSize=sizeof(menuBar);
+    if (GetMenuBarInfo(hWnd, OBJID_MENU, 0, &menuBar))
+    {
+      GetWindowRect(hWnd, &rcWindow);
+      OffsetRect(&menuBar.rcBar, -rcWindow.left, -rcWindow.top);
+      FillRect(menu->hDC, &menuBar.rcBar, hBrush);
+    }
+    DeleteObject(hBrush);
+    return 0;
+  }
+  if (IsDarkTheme() && uMsg == WM_UAHDRAWMENUITEM && lParam)
+  {
+    DARKUAHMENUITEM *item=(DARKUAHMENUITEM *)lParam;
+    wchar_t wszText[256];
+    HBRUSH hBrush;
+    HFONT hFont=(HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    HFONT hOldFont;
+    COLORREF crBackground=(item->draw.itemState & (ODS_SELECTED|ODS_HOTLIGHT))?
+                          RGB(67, 67, 67):RGB(37, 37, 37);
+    UINT uTextFlags=DT_SINGLELINE|DT_VCENTER|DT_CENTER;
+
+    hBrush=CreateSolidBrush(crBackground);
+    FillRect(item->draw.hDC, &item->draw.rcItem, hBrush);
+    DeleteObject(hBrush);
+    if (item->draw.itemState & ODS_NOACCEL) uTextFlags|=DT_HIDEPREFIX;
+    SetBkMode(item->draw.hDC, TRANSPARENT);
+    SetTextColor(item->draw.hDC, (item->draw.itemState & (ODS_DISABLED|ODS_GRAYED))?
+                 RGB(145, 145, 145):RGB(230, 230, 230));
+    hOldFont=(HFONT)SelectObject(item->draw.hDC, hFont);
+    if (GetMenuStringW(item->menu.hMenu, item->nPosition, wszText, 256, MF_BYPOSITION))
+      DrawTextW(item->draw.hDC, wszText, -1, &item->draw.rcItem, uTextFlags);
+    SelectObject(item->draw.hDC, hOldFont);
+    return 0;
+  }
   if (uMsg == WM_CREATE)
   {
     int *lpSBParts;
@@ -1786,6 +2104,9 @@ LRESULT CALLBACK MainProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                                (HMENU)(UINT_PTR)ID_STATUS,
                                hInstance,
                                NULL);
+
+    lpOldStatusProc=(WNDPROC)GetWindowLongPtrWide(hStatus, GWLP_WNDPROC);
+    SetWindowLongPtrWide(hStatus, GWLP_WNDPROC, (UINT_PTR)NewStatusProc);
 
     SendMessage(hStatus, SB_SIMPLE, FALSE, 0);
     GetWindowRect(hStatus, &rcRect);
@@ -1921,6 +2242,8 @@ LRESULT CALLBACK MainProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
           if (bOldComctl32) EnableMenuItem(hMainMenu, IDM_WINDOW_TABTYPE_FLATBUTTONS, MF_GRAYED);
           DoWindowTabSwitch(moCur.dwTabOptionsMDI, TRUE);
         }
+
+        ApplyInterfaceTheme();
 
         //PreShow
         nms.dwStyle=&moCur.dwMainStyle;
@@ -2544,6 +2867,8 @@ LRESULT CALLBACK MainProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             return (LRESULT)bAkelEdit;
           case MI_MDI:
             return (LRESULT)nMDI;
+          case MI_DARKMODE:
+            return (LRESULT)IsDarkTheme();
           case MI_LANGHANDLE:
             return (LRESULT)hLangModule;
           case MI_LANGMODULEA:
@@ -4873,8 +5198,14 @@ LRESULT CALLBACK MainProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
       }
     }
   }
+  else if (uMsg == WM_SETTINGCHANGE)
+  {
+    if (moCur.dwThemeMode == THEME_SYSTEM)
+      ApplyInterfaceTheme();
+  }
   else if (uMsg == WM_ERASEBKGND)
   {
+    PaintDarkBackground(hWnd, (HDC)wParam);
     //We don't use HOLLOW_BRUSH for hbrBackground,
     //so deny erase background to avoid flickering.
     return 1;
@@ -7105,6 +7436,8 @@ BOOL CALLBACK CloneDragAndDropMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 
 LRESULT CALLBACK NewMdiClientProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+  if (uMsg == WM_ERASEBKGND && PaintDarkBackground(hWnd, (HDC)wParam))
+    return 1;
   if (uMsg == WM_WINDOWPOSCHANGING)
   {
     WINDOWPOS *lpWindowPos=(WINDOWPOS *)lParam;
@@ -7220,11 +7553,133 @@ LRESULT CALLBACK NewMdiClientProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
   return CallWindowProcWide(lpOldMdiClientProc, hWnd, uMsg, wParam, lParam);
 }
 
+LRESULT CALLBACK NewStatusProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+  if (uMsg == WM_THEMECHANGED)
+    InvalidateRect(hWnd, NULL, TRUE);
+  if (IsDarkTheme())
+  {
+    if (uMsg == WM_ERASEBKGND) return 1;
+    if (uMsg == WM_PAINT)
+    {
+      PAINTSTRUCT ps;
+      HDC hDC=BeginPaint(hWnd, &ps);
+      HBRUSH hBackground=CreateSolidBrush(RGB(37, 37, 37));
+      HBRUSH hSeparator=CreateSolidBrush(RGB(70, 70, 70));
+      HFONT hFont=(HFONT)SendMessage(hWnd, WM_GETFONT, 0, 0);
+      HFONT hOldFont=NULL;
+      RECT rcClient;
+      int nParts;
+      int i;
+
+      GetClientRect(hWnd, &rcClient);
+      FillRect(hDC, &rcClient, hBackground);
+      if (hFont) hOldFont=(HFONT)SelectObject(hDC, hFont);
+      SetBkMode(hDC, TRANSPARENT);
+      SetTextColor(hDC, RGB(222, 222, 222));
+      nParts=(int)SendMessage(hWnd, SB_GETPARTS, 0, 0);
+      for (i=0; i < nParts; ++i)
+      {
+        RECT rcPart;
+        int nLength;
+        wchar_t *wpText;
+
+        if (!SendMessage(hWnd, SB_GETRECT, i, (LPARAM)&rcPart)) continue;
+        nLength=LOWORD(SendMessage(hWnd, SB_GETTEXTLENGTHW, i, 0));
+        if (wpText=API_AllocWide(nLength + 1))
+        {
+          SendMessage(hWnd, SB_GETTEXTW, i, (LPARAM)wpText);
+          rcPart.left+=4;
+          rcPart.right-=3;
+          DrawTextW(hDC, wpText, -1, &rcPart, DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_END_ELLIPSIS);
+          API_FreeWide(wpText);
+        }
+        if (i > 0)
+        {
+          RECT rcLine=rcPart;
+          rcLine.left-=4;
+          rcLine.right=rcLine.left + 1;
+          FillRect(hDC, &rcLine, hSeparator);
+        }
+      }
+      if (hOldFont) SelectObject(hDC, hOldFont);
+      DeleteObject(hBackground);
+      DeleteObject(hSeparator);
+      EndPaint(hWnd, &ps);
+      return 0;
+    }
+  }
+  return CallWindowProcWide(lpOldStatusProc, hWnd, uMsg, wParam, lParam);
+}
+
+void PaintDarkTabs(HWND hWnd)
+{
+  PAINTSTRUCT ps;
+  HDC hDC=BeginPaint(hWnd, &ps);
+  HBRUSH hBackground=CreateSolidBrush(RGB(37, 37, 37));
+  HBRUSH hSelected=CreateSolidBrush(RGB(58, 58, 58));
+  HBRUSH hBorder=CreateSolidBrush(RGB(85, 85, 85));
+  HFONT hFont=(HFONT)SendMessage(hWnd, WM_GETFONT, 0, 0);
+  HFONT hOldFont=NULL;
+  RECT rcClient;
+  int nSelected=(int)SendMessage(hWnd, TCM_GETCURSEL, 0, 0);
+  int nCount=(int)SendMessage(hWnd, TCM_GETITEMCOUNT, 0, 0);
+  int i;
+
+  GetClientRect(hWnd, &rcClient);
+  FillRect(hDC, &rcClient, hBackground);
+  if (hFont) hOldFont=(HFONT)SelectObject(hDC, hFont);
+  SetBkMode(hDC, TRANSPARENT);
+  SetTextColor(hDC, RGB(225, 225, 225));
+  for (i=0; i < nCount; ++i)
+  {
+    RECT rcItem;
+    TCITEMW item;
+    wchar_t wszText[256];
+
+    if (!SendMessage(hWnd, TCM_GETITEMRECT, i, (LPARAM)&rcItem)) continue;
+    if (rcItem.left >= rcClient.right || rcItem.right <= rcClient.left) continue;
+    xmemset(&item, 0, sizeof(item));
+    item.mask=TCIF_TEXT|TCIF_IMAGE;
+    item.pszText=wszText;
+    item.cchTextMax=256;
+    wszText[0]=L'\0';
+    SendMessage(hWnd, TCM_GETITEMW, i, (LPARAM)&item);
+    FillRect(hDC, &rcItem, i == nSelected?hSelected:hBackground);
+    FrameRect(hDC, &rcItem, hBorder);
+    rcItem.left+=7;
+    rcItem.right-=5;
+    if (item.iImage >= 0 && hImageList)
+    {
+      ImageList_Draw(hImageList, item.iImage, hDC, rcItem.left, rcItem.top + (rcItem.bottom - rcItem.top - 16) / 2, ILD_TRANSPARENT);
+      rcItem.left+=19;
+    }
+    DrawTextW(hDC, wszText, -1, &rcItem, DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_END_ELLIPSIS);
+  }
+  if (hOldFont) SelectObject(hDC, hOldFont);
+  DeleteObject(hBackground);
+  DeleteObject(hSelected);
+  DeleteObject(hBorder);
+  EndPaint(hWnd, &ps);
+}
+
 LRESULT CALLBACK NewTabProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
   static int nDragItem;
   static int nDropItem;
   static int nMouseMove;
+
+  if (uMsg == WM_THEMECHANGED)
+    InvalidateRect(hWnd, NULL, TRUE);
+  if (IsDarkTheme())
+  {
+    if (uMsg == WM_ERASEBKGND) return 1;
+    if (uMsg == WM_PAINT)
+    {
+      PaintDarkTabs(hWnd);
+      return 0;
+    }
+  }
 
   if (uMsg == WM_CONTEXTMENU)
   {
@@ -7772,7 +8227,14 @@ LRESULT CALLBACK NewButtonDrawProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         GetClientRect(hWnd, &rcButton);
 
         //Draw edge
-        if ((dwMouseCapture & MSC_BUTTONPRESS) && bMousePush)
+        if (IsDarkTheme())
+        {
+          HBRUSH hEdge=CreateSolidBrush(((dwMouseCapture & MSC_BUTTONPRESS) && bMousePush)?
+                                        RGB(105, 105, 105):RGB(73, 73, 73));
+          FrameRect(hDC, &rcButton, hEdge);
+          DeleteObject(hEdge);
+        }
+        else if ((dwMouseCapture & MSC_BUTTONPRESS) && bMousePush)
         {
           DrawEdge(hDC, &rcButton, EDGE_SUNKEN, BF_RECT);
         }
