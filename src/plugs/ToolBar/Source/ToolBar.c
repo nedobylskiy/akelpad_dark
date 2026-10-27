@@ -916,7 +916,22 @@ LRESULT CALLBACK ToolbarBGProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
   }
   else if (uMsg == WM_ERASEBKGND)
   {
+    if (SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0))
+    {
+      RECT rc;
+      HBRUSH hBrush=CreateSolidBrush(RGB(37, 37, 37));
+
+      GetClientRect(hWnd, &rc);
+      FillRect((HDC)wParam, &rc, hBrush);
+      DeleteObject(hBrush);
+      return 1;
+    }
     return 0;
+  }
+  else if (uMsg == WM_THEMECHANGED)
+  {
+    InvalidateRect(hWnd, NULL, TRUE);
+    if (hToolbar) InvalidateRect(hToolbar, NULL, TRUE);
   }
   else if (uMsg == WM_NOTIFY)
   {
@@ -926,7 +941,18 @@ LRESULT CALLBACK ToolbarBGProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
       LPNMTBCUSTOMDRAW lpcd=(LPNMTBCUSTOMDRAW)lParam;
 
       if (lpcd->nmcd.dwDrawStage == CDDS_PREPAINT)
+      {
+        if (SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0))
+        {
+          RECT rc;
+          HBRUSH hBrush=CreateSolidBrush(RGB(37, 37, 37));
+
+          GetClientRect(hToolbar, &rc);
+          FillRect(lpcd->nmcd.hdc, &rc, hBrush);
+          DeleteObject(hBrush);
+        }
         return CDRF_NOTIFYITEMDRAW;
+      }
       if (lpcd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT)
       {
         if (lpcd->nmcd.dwItemSpec == SEPARATOR2_ID)
@@ -956,6 +982,21 @@ LRESULT CALLBACK ToolbarBGProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
             DeleteObject(hBrush);
           }
           return CDRF_SKIPDEFAULT;
+        }
+        if (SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0))
+        {
+          HBRUSH hBrush;
+          COLORREF crBackground=(lpcd->nmcd.uItemState & (CDIS_HOT|CDIS_SELECTED|CDIS_CHECKED))?
+                                RGB(67, 67, 67):RGB(37, 37, 37);
+
+          hBrush=CreateSolidBrush(crBackground);
+          FillRect(lpcd->nmcd.hdc, &lpcd->nmcd.rc, hBrush);
+          DeleteObject(hBrush);
+          lpcd->clrText=RGB(225, 225, 225);
+          lpcd->clrTextHighlight=RGB(255, 255, 255);
+          lpcd->clrBtnFace=crBackground;
+          lpcd->clrBtnHighlight=RGB(80, 80, 80);
+          return TBCDRF_NOBACKGROUND|TBCDRF_NOEDGES|TBCDRF_NOETCHEDEFFECT;
         }
       }
       return CDRF_DODEFAULT;

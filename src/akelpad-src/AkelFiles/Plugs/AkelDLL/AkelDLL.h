@@ -273,6 +273,7 @@
 #define MI_VERCOMCTL32               43   //Return: comctl32.dll version set as MAKELONG(major,minor).
 #define MI_AKELEDIT                  44   //Return: AkelEdit control is used.
 #define MI_MDI                       45   //Return: window mode, see WMD_* defines.
+#define MI_DARKMODE                  46   //Return: TRUE when the effective interface theme is dark.
 #define MI_LANGHANDLE                50   //Return: language module handle.
 #define MI_LANGMODULEA               51   //Return: copied chars. (char *)lParam - buffer that receives language module string.
 #define MI_LANGMODULEW               52   //Return: copied chars. (wchar_t *)lParam - buffer that receives language module string.

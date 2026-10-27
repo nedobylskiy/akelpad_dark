@@ -1444,6 +1444,8 @@ LRESULT CALLBACK NewUserEditProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
 BOOL CALLBACK EditMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, LRESULT *lResult)
 {
+  if (uMsg == WM_THEMECHANGED)
+    InvalidateRect(hWnd, NULL, TRUE);
   if (uMsg == WM_PAINT)
   {
     char szLineNumber[MAX_PATH];
@@ -2960,6 +2962,18 @@ void GetCoderColors(HWND hWnd)
       pcs.dwSupport=PDS_STRWIDE;
       SendMessage(hMainWnd, AKD_DLLCALLW, 0, (LPARAM)&pcs);
     }
+  }
+  if (SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0))
+  {
+    crDrawBoardText=RGB(215, 215, 215);
+    crDrawBoardBk=RGB(37, 37, 37);
+    crDrawBoardBorder=RGB(75, 75, 75);
+    crDrawBoardBookmarkText=RGB(225, 225, 225);
+    crDrawBoardBookmarkBk=RGB(58, 58, 58);
+    crDrawBoardBookmarkBorder=RGB(90, 90, 90);
+    crDrawBoardLineUnsaved=RGB(226, 158, 62);
+    crDrawBoardLineSaved=RGB(92, 170, 120);
+    crDrawBoardRulerScale=RGB(145, 145, 145);
   }
 }
 

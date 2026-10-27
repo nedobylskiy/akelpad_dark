@@ -2991,6 +2991,8 @@ INT_PTR CALLBACK qsearchDlgProc(HWND hDlg,
     static HBRUSH hTextNotFoundBrush = NULL;
     static HBRUSH hTextNotRegExpBrush = NULL;
     static HBRUSH hTextEOFBrush = NULL;
+    static HBRUSH hDarkBackgroundBrush = NULL;
+    static HBRUSH hDarkEditBrush = NULL;
     //static BOOL   bHotKeyPressed = FALSE;
 
     static HWND hEdFindText = NULL;
@@ -3019,6 +3021,36 @@ INT_PTR CALLBACK qsearchDlgProc(HWND hDlg,
 
     switch ( uMsg )
     {
+        case WM_THEMECHANGED:
+        {
+            RedrawWindow(hDlg, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE);
+            break;
+        }
+        case WM_ERASEBKGND:
+        {
+            if ( SendMessage(g_Plugin.hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0) )
+            {
+                RECT rc;
+                if ( !hDarkBackgroundBrush ) hDarkBackgroundBrush = CreateSolidBrush(RGB(37, 37, 37));
+                GetClientRect(hDlg, &rc);
+                FillRect((HDC) wParam, &rc, hDarkBackgroundBrush);
+                return 1;
+            }
+            break;
+        }
+        case WM_CTLCOLORDLG:
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLORBTN:
+        {
+            if ( SendMessage(g_Plugin.hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0) )
+            {
+                if ( !hDarkBackgroundBrush ) hDarkBackgroundBrush = CreateSolidBrush(RGB(37, 37, 37));
+                SetBkMode((HDC) wParam, TRANSPARENT);
+                SetTextColor((HDC) wParam, RGB(225, 225, 225));
+                return (INT_PTR) hDarkBackgroundBrush;
+            }
+            break;
+        }
         case WM_COMMAND:
         {
             unsigned int id = LOWORD(wParam);
@@ -3505,6 +3537,13 @@ INT_PTR CALLBACK qsearchDlgProc(HWND hDlg,
                         return (LRESULT) hTextNotRegExpBrush;
 
                     default:
+                        if ( SendMessage(g_Plugin.hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0) )
+                        {
+                            if ( !hDarkEditBrush ) hDarkEditBrush = CreateSolidBrush(RGB(48, 48, 48));
+                            SetTextColor((HDC) wParam, RGB(235, 235, 235));
+                            SetBkColor((HDC) wParam, RGB(48, 48, 48));
+                            return (INT_PTR) hDarkEditBrush;
+                        }
                         SetBkColor( (HDC) wParam, GetSysColor(nBkColor) );
                         return (LRESULT) GetSysColorBrush(nBkColor);
                 }

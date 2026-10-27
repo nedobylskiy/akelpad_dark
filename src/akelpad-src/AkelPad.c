@@ -571,6 +571,8 @@ DWORD dwMdiFrameActivating=0;
 RECT rcMdiListMinMaxDialog={221, 463, 0, 0};
 WNDPROC lpOldMdiClientProc;
 WNDPROC lpOldTabProc;
+WNDPROC lpOldStatusProc;
+int nDarkMenuSelected=-1;
 
 //GetProcAddress
 HMONITOR (WINAPI *MonitorFromPointPtr)(POINT, DWORD);
@@ -708,6 +710,55 @@ BOOL ThemeDialogMessage(HWND hDlg, UINT uMsg, WPARAM wParam)
   return TRUE;
 }
 
+BOOL CALLBACK NotifyChildThemeChanged(HWND hWnd, LPARAM lParam)
+{
+  PostMessage(hWnd, WM_THEMECHANGED, 0, 0);
+  return TRUE;
+}
+
+void PaintDarkMenuBar(HWND hWnd)
+{
+  MENUBARINFO menuBar;
+  RECT rcWindow;
+  HDC hDC;
+  HBRUSH hBackground;
+  HBRUSH hSelected;
+  HFONT hFont;
+  HFONT hOldFont;
+  int nCount;
+  int i;
+
+  if (!IsDarkTheme() || !hMainMenu) return;
+  menuBar.cbSize=sizeof(menuBar);
+  if (!GetMenuBarInfo(hWnd, OBJID_MENU, 0, &menuBar)) return;
+  if (!(hDC=GetWindowDC(hWnd))) return;
+  GetWindowRect(hWnd, &rcWindow);
+  OffsetRect(&menuBar.rcBar, -rcWindow.left, -rcWindow.top);
+  hBackground=CreateSolidBrush(RGB(37, 37, 37));
+  hSelected=CreateSolidBrush(RGB(67, 67, 67));
+  FillRect(hDC, &menuBar.rcBar, hBackground);
+  hFont=(HFONT)GetStockObject(DEFAULT_GUI_FONT);
+  hOldFont=(HFONT)SelectObject(hDC, hFont);
+  SetBkMode(hDC, TRANSPARENT);
+  SetTextColor(hDC, RGB(230, 230, 230));
+  nCount=GetMenuItemCount(hMainMenu);
+  for (i=0; i < nCount; ++i)
+  {
+    RECT rcItem;
+    wchar_t wszText[256];
+
+    if (!GetMenuItemRect(hWnd, hMainMenu, i, &rcItem)) continue;
+    OffsetRect(&rcItem, -rcWindow.left, -rcWindow.top);
+    if (i == nDarkMenuSelected) FillRect(hDC, &rcItem, hSelected);
+    if (GetMenuStringW(hMainMenu, i, wszText, 256, MF_BYPOSITION))
+      DrawTextW(hDC, wszText, -1, &rcItem, DT_SINGLELINE|DT_VCENTER|DT_CENTER);
+  }
+  SelectObject(hDC, hOldFont);
+  DeleteObject(hBackground);
+  DeleteObject(hSelected);
+  ReleaseDC(hWnd, hDC);
+}
+
 void ApplyInterfaceTheme()
 {
   HMODULE hDwm;
@@ -748,7 +799,9 @@ void ApplyInterfaceTheme()
   }
   ApplyEditorTheme();
   if (hWndPropertySheet) ApplyThemeToDialog(hWndPropertySheet);
+  EnumChildWindows(hMainWnd, NotifyChildThemeChanged, 0);
   DrawMenuBar(hMainWnd);
+  PaintDarkMenuBar(hMainWnd);
   RedrawWindow(hMainWnd, NULL, NULL, RDW_INVALIDATE|RDW_ALLCHILDREN|RDW_FRAME);
 }
 
@@ -1837,6 +1890,12 @@ LRESULT CALLBACK CommonMainProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     cwprs.hwnd=hWnd;
     lpfnMainProcRet(&cwprs);
   }
+  if (uMsg == WM_MENUSELECT && (HMENU)lParam == hMainMenu && (HIWORD(wParam) & MF_POPUP))
+    nDarkMenuSelected=LOWORD(wParam);
+  else if (uMsg == WM_EXITMENULOOP)
+    nDarkMenuSelected=-1;
+  if (uMsg == WM_NCPAINT || uMsg == WM_MENUSELECT || uMsg == WM_EXITMENULOOP)
+    PaintDarkMenuBar(hWnd);
   return lResult;
 }
 
@@ -1974,6 +2033,9 @@ LRESULT CALLBACK MainProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                                (HMENU)(UINT_PTR)ID_STATUS,
                                hInstance,
                                NULL);
+
+    lpOldStatusProc=(WNDPROC)GetWindowLongPtrWide(hStatus, GWLP_WNDPROC);
+    SetWindowLongPtrWide(hStatus, GWLP_WNDPROC, (UINT_PTR)NewStatusProc);
 
     SendMessage(hStatus, SB_SIMPLE, FALSE, 0);
     GetWindowRect(hStatus, &rcRect);
@@ -2734,6 +2796,8 @@ LRESULT CALLBACK MainProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             return (LRESULT)bAkelEdit;
           case MI_MDI:
             return (LRESULT)nMDI;
+          case MI_DARKMODE:
+            return (LRESULT)IsDarkTheme();
           case MI_LANGHANDLE:
             return (LRESULT)hLangModule;
           case MI_LANGMODULEA:
@@ -7418,11 +7482,133 @@ LRESULT CALLBACK NewMdiClientProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
   return CallWindowProcWide(lpOldMdiClientProc, hWnd, uMsg, wParam, lParam);
 }
 
+LRESULT CALLBACK NewStatusProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+  if (uMsg == WM_THEMECHANGED)
+    InvalidateRect(hWnd, NULL, TRUE);
+  if (IsDarkTheme())
+  {
+    if (uMsg == WM_ERASEBKGND) return 1;
+    if (uMsg == WM_PAINT)
+    {
+      PAINTSTRUCT ps;
+      HDC hDC=BeginPaint(hWnd, &ps);
+      HBRUSH hBackground=CreateSolidBrush(RGB(37, 37, 37));
+      HBRUSH hSeparator=CreateSolidBrush(RGB(70, 70, 70));
+      HFONT hFont=(HFONT)SendMessage(hWnd, WM_GETFONT, 0, 0);
+      HFONT hOldFont=NULL;
+      RECT rcClient;
+      int nParts;
+      int i;
+
+      GetClientRect(hWnd, &rcClient);
+      FillRect(hDC, &rcClient, hBackground);
+      if (hFont) hOldFont=(HFONT)SelectObject(hDC, hFont);
+      SetBkMode(hDC, TRANSPARENT);
+      SetTextColor(hDC, RGB(222, 222, 222));
+      nParts=(int)SendMessage(hWnd, SB_GETPARTS, 0, 0);
+      for (i=0; i < nParts; ++i)
+      {
+        RECT rcPart;
+        int nLength;
+        wchar_t *wpText;
+
+        if (!SendMessage(hWnd, SB_GETRECT, i, (LPARAM)&rcPart)) continue;
+        nLength=LOWORD(SendMessage(hWnd, SB_GETTEXTLENGTHW, i, 0));
+        if (wpText=API_AllocWide(nLength + 1))
+        {
+          SendMessage(hWnd, SB_GETTEXTW, i, (LPARAM)wpText);
+          rcPart.left+=4;
+          rcPart.right-=3;
+          DrawTextW(hDC, wpText, -1, &rcPart, DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_END_ELLIPSIS);
+          API_FreeWide(wpText);
+        }
+        if (i > 0)
+        {
+          RECT rcLine=rcPart;
+          rcLine.left-=4;
+          rcLine.right=rcLine.left + 1;
+          FillRect(hDC, &rcLine, hSeparator);
+        }
+      }
+      if (hOldFont) SelectObject(hDC, hOldFont);
+      DeleteObject(hBackground);
+      DeleteObject(hSeparator);
+      EndPaint(hWnd, &ps);
+      return 0;
+    }
+  }
+  return CallWindowProcWide(lpOldStatusProc, hWnd, uMsg, wParam, lParam);
+}
+
+void PaintDarkTabs(HWND hWnd)
+{
+  PAINTSTRUCT ps;
+  HDC hDC=BeginPaint(hWnd, &ps);
+  HBRUSH hBackground=CreateSolidBrush(RGB(37, 37, 37));
+  HBRUSH hSelected=CreateSolidBrush(RGB(58, 58, 58));
+  HBRUSH hBorder=CreateSolidBrush(RGB(85, 85, 85));
+  HFONT hFont=(HFONT)SendMessage(hWnd, WM_GETFONT, 0, 0);
+  HFONT hOldFont=NULL;
+  RECT rcClient;
+  int nSelected=(int)SendMessage(hWnd, TCM_GETCURSEL, 0, 0);
+  int nCount=(int)SendMessage(hWnd, TCM_GETITEMCOUNT, 0, 0);
+  int i;
+
+  GetClientRect(hWnd, &rcClient);
+  FillRect(hDC, &rcClient, hBackground);
+  if (hFont) hOldFont=(HFONT)SelectObject(hDC, hFont);
+  SetBkMode(hDC, TRANSPARENT);
+  SetTextColor(hDC, RGB(225, 225, 225));
+  for (i=0; i < nCount; ++i)
+  {
+    RECT rcItem;
+    TCITEMW item;
+    wchar_t wszText[256];
+
+    if (!SendMessage(hWnd, TCM_GETITEMRECT, i, (LPARAM)&rcItem)) continue;
+    if (rcItem.left >= rcClient.right || rcItem.right <= rcClient.left) continue;
+    xmemset(&item, 0, sizeof(item));
+    item.mask=TCIF_TEXT|TCIF_IMAGE;
+    item.pszText=wszText;
+    item.cchTextMax=256;
+    wszText[0]=L'\0';
+    SendMessage(hWnd, TCM_GETITEMW, i, (LPARAM)&item);
+    FillRect(hDC, &rcItem, i == nSelected?hSelected:hBackground);
+    FrameRect(hDC, &rcItem, hBorder);
+    rcItem.left+=7;
+    rcItem.right-=5;
+    if (item.iImage >= 0 && hImageList)
+    {
+      ImageList_Draw(hImageList, item.iImage, hDC, rcItem.left, rcItem.top + (rcItem.bottom - rcItem.top - 16) / 2, ILD_TRANSPARENT);
+      rcItem.left+=19;
+    }
+    DrawTextW(hDC, wszText, -1, &rcItem, DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_END_ELLIPSIS);
+  }
+  if (hOldFont) SelectObject(hDC, hOldFont);
+  DeleteObject(hBackground);
+  DeleteObject(hSelected);
+  DeleteObject(hBorder);
+  EndPaint(hWnd, &ps);
+}
+
 LRESULT CALLBACK NewTabProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
   static int nDragItem;
   static int nDropItem;
   static int nMouseMove;
+
+  if (uMsg == WM_THEMECHANGED)
+    InvalidateRect(hWnd, NULL, TRUE);
+  if (IsDarkTheme())
+  {
+    if (uMsg == WM_ERASEBKGND) return 1;
+    if (uMsg == WM_PAINT)
+    {
+      PaintDarkTabs(hWnd);
+      return 0;
+    }
+  }
 
   if (uMsg == WM_CONTEXTMENU)
   {
