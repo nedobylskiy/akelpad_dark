@@ -897,8 +897,11 @@ void CALLBACK NewMainProcRet(CWPRETSTRUCT *cwprs)
 
 LRESULT CALLBACK ToolbarBGProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+  static BOOL bThemeRecreateQueued=FALSE;
+
   if (uMsg == AKDLL_RECREATE)
   {
+    bThemeRecreateQueued=FALSE;
     DestroyToolbarWindow(FALSE);
     CreateToolbarWindow();
     SendMessage(hMainWnd, AKD_RESIZE, 0, 0);
@@ -932,6 +935,11 @@ LRESULT CALLBACK ToolbarBGProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
   {
     InvalidateRect(hWnd, NULL, TRUE);
     if (hToolbar) InvalidateRect(hToolbar, NULL, TRUE);
+    if (!bThemeRecreateQueued)
+    {
+      bThemeRecreateQueued=TRUE;
+      PostMessage(hWnd, AKDLL_RECREATE, 0, 0);
+    }
   }
   else if (uMsg == WM_NOTIFY)
   {
@@ -955,6 +963,20 @@ LRESULT CALLBACK ToolbarBGProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
       }
       if (lpcd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT)
       {
+        if (SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0) && !lpcd->nmcd.dwItemSpec)
+        {
+          RECT rcBar=lpcd->nmcd.rc;
+          HBRUSH hBrush=CreateSolidBrush(RGB(72, 72, 72));
+          int x=(rcBar.left + rcBar.right) / 2;
+
+          rcBar.left=x;
+          rcBar.right=x + 1;
+          rcBar.top+=5;
+          rcBar.bottom-=5;
+          if (rcBar.bottom > rcBar.top) FillRect(lpcd->nmcd.hdc, &rcBar, hBrush);
+          DeleteObject(hBrush);
+          return CDRF_SKIPDEFAULT;
+        }
         if (lpcd->nmcd.dwItemSpec == SEPARATOR2_ID)
         {
           //Bar is centred in the space, as tall as the icons and vertically centred
@@ -1189,6 +1211,62 @@ BOOL CreateToolbarWindow()
   return bResult;
 }
 
+// Invert only neutral icon pixels.  This removes a white icon matte without
+// changing the colours of the artwork, and keeps the original alpha and mask.
+HICON CreateDarkToolbarIcon(HICON hIcon)
+{
+  ICONINFO icon;
+  BITMAP bitmap;
+  BITMAPINFO info;
+  BYTE *pixels=NULL;
+  BYTE *mask=NULL;
+  HDC hDC=NULL;
+  HICON hDarkIcon=NULL;
+  DWORD count;
+  DWORD i;
+
+  if (!GetIconInfo(hIcon, &icon)) return NULL;
+  if (!icon.hbmColor || !icon.hbmMask ||
+      !GetObjectA(icon.hbmColor, sizeof(bitmap), &bitmap)) goto Finish;
+  count=(DWORD)bitmap.bmWidth * (DWORD)bitmap.bmHeight;
+  pixels=(BYTE *)GlobalAlloc(GPTR, count * 4);
+  mask=(BYTE *)GlobalAlloc(GPTR, count * 4);
+  if (!pixels || !mask) goto Finish;
+  xmemset(&info, 0, sizeof(info));
+  info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
+  info.bmiHeader.biWidth=bitmap.bmWidth;
+  info.bmiHeader.biHeight=bitmap.bmHeight;
+  info.bmiHeader.biPlanes=1;
+  info.bmiHeader.biBitCount=32;
+  info.bmiHeader.biCompression=BI_RGB;
+  if (!(hDC=GetDC(NULL))) goto Finish;
+  if (!GetDIBits(hDC, icon.hbmColor, 0, bitmap.bmHeight, pixels, &info, DIB_RGB_COLORS) ||
+      !GetDIBits(hDC, icon.hbmMask, 0, bitmap.bmHeight, mask, &info, DIB_RGB_COLORS)) goto Finish;
+  for (i=0; i < count; ++i)
+  {
+    BYTE *pixel=pixels + i * 4;
+    BYTE red=pixel[2];
+    BYTE green=pixel[1];
+    BYTE blue=pixel[0];
+    BYTE minimum=min(red, min(green, blue));
+    BYTE maximum=max(red, max(green, blue));
+    BYTE value;
+
+    if (mask[i * 4] || maximum - minimum > 20) continue;
+    value=(BYTE)(37 + (255 - ((int)red + green + blue) / 3) * 193 / 255);
+    pixel[0]=pixel[1]=pixel[2]=value;
+  }
+  if (!SetDIBits(hDC, icon.hbmColor, 0, bitmap.bmHeight, pixels, &info, DIB_RGB_COLORS)) goto Finish;
+  hDarkIcon=CreateIconIndirect(&icon);
+Finish:
+  if (hDC) ReleaseDC(NULL, hDC);
+  if (pixels) GlobalFree(pixels);
+  if (mask) GlobalFree(mask);
+  if (icon.hbmColor) DeleteObject(icon.hbmColor);
+  if (icon.hbmMask) DeleteObject(icon.hbmMask);
+  return hDarkIcon;
+}
+
 BOOL CreateToolbarData(STACKTOOLBAR *hStack, const wchar_t *wpText)
 {
   ROWITEM *lpRowItem=NULL;
@@ -1263,12 +1341,14 @@ BOOL CreateToolbarData(STACKTOOLBAR *hStack, const wchar_t *wpText)
       sizeIcon.cy=32 /*GetSystemMetrics(SM_CYSMICON)*/;
     }
     hStack->hImageList=ImageList_Create(sizeIcon.cx, sizeIcon.cy, (nIconsBit == 16?ILC_COLOR16:ILC_COLOR32)|ILC_MASK, 0, 0);
-    ImageList_SetBkColor(hStack->hImageList, GetSysColor(COLOR_BTNFACE));
+    ImageList_SetBkColor(hStack->hImageList,
+                         SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0)?CLR_NONE:GetSysColor(COLOR_BTNFACE));
 
     if (nGrayedIcons == GI_PLUGIN)
     {
       hStack->hDisabledImageList=ImageList_Create(sizeIcon.cx, sizeIcon.cy, (nIconsBit == 16?ILC_COLOR16:ILC_COLOR32)|ILC_MASK, 0, 0);
-      ImageList_SetBkColor(hStack->hDisabledImageList, GetSysColor(COLOR_BTNFACE));
+      ImageList_SetBkColor(hStack->hDisabledImageList,
+                           SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0)?CLR_NONE:GetSysColor(COLOR_BTNFACE));
     }
 
     //Rows
@@ -1721,6 +1801,14 @@ BOOL CreateToolbarData(STACKTOOLBAR *hStack, const wchar_t *wpText)
                       DestroyIcon(hIcon);
                       hIcon=hAdjustIcon;
                     }
+                  }
+                }
+                if (SendMessage(hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0))
+                {
+                  if (hAdjustIcon=CreateDarkToolbarIcon(hIcon))
+                  {
+                    DestroyIcon(hIcon);
+                    hIcon=hAdjustIcon;
                   }
                 }
                 ImageList_AddIcon(hStack->hImageList, hIcon);
