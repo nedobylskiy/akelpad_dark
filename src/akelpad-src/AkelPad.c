@@ -628,6 +628,19 @@ void ApplyInterfaceTheme()
   RedrawWindow(hMainWnd, NULL, NULL, RDW_INVALIDATE|RDW_ALLCHILDREN|RDW_FRAME);
 }
 
+BOOL PaintDarkBackground(HWND hWnd, HDC hDC)
+{
+  RECT rc;
+  HBRUSH hBrush;
+
+  if (!IsDarkTheme()) return FALSE;
+  GetClientRect(hWnd, &rc);
+  hBrush=CreateSolidBrush(RGB(30, 30, 30));
+  FillRect(hDC, &rc, hBrush);
+  DeleteObject(hBrush);
+  return TRUE;
+}
+
 //GCC
 #ifdef __GNUC__
 int main()
@@ -4932,6 +4945,7 @@ LRESULT CALLBACK MainProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
   }
   else if (uMsg == WM_ERASEBKGND)
   {
+    PaintDarkBackground(hWnd, (HDC)wParam);
     //We don't use HOLLOW_BRUSH for hbrBackground,
     //so deny erase background to avoid flickering.
     return 1;
@@ -7162,6 +7176,8 @@ BOOL CALLBACK CloneDragAndDropMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 
 LRESULT CALLBACK NewMdiClientProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+  if (uMsg == WM_ERASEBKGND && PaintDarkBackground(hWnd, (HDC)wParam))
+    return 1;
   if (uMsg == WM_WINDOWPOSCHANGING)
   {
     WINDOWPOS *lpWindowPos=(WINDOWPOS *)lParam;
