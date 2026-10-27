@@ -15470,6 +15470,7 @@ int CALLBACK PropSheetProc(HWND hDlg, UINT uMsg, LPARAM lParam)
   else if (uMsg == PSCB_INITIALIZED)
   {
     hWndPropertySheet=hDlg;
+    ApplyThemeToDialog(hDlg);
     hWndPropTab=(HWND)SendMessage(hDlg, PSM_GETTABCONTROL, 0, 0);
     hWndPropOK=GetDlgItem(hDlg, IDOK);
     hWndPropCancel=GetDlgItem(hDlg, IDCANCEL);
@@ -15490,6 +15491,12 @@ int CALLBACK PropSheetProc(HWND hDlg, UINT uMsg, LPARAM lParam)
 
 LRESULT CALLBACK NewPropProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+  HBRUSH hBrush;
+
+  if ((uMsg == WM_CTLCOLORDLG || uMsg == WM_CTLCOLORSTATIC ||
+       uMsg == WM_CTLCOLOREDIT || uMsg == WM_CTLCOLORLISTBOX ||
+       uMsg == WM_CTLCOLORBTN) && (hBrush=ThemeDialogBrush(uMsg, wParam)))
+    return (LRESULT)hBrush;
   if (bPropResize || uMsg == WM_PAINT)
   {
     ResizeDialogMessages(&rdsProp, &rcPropMinMaxDialog, &moCur.rcPropCurrentDialog, RDM_PAINTSIZEGRIP, hWnd, uMsg, wParam, lParam);
@@ -15524,8 +15531,11 @@ BOOL CALLBACK OptionsGeneralDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
   static HWND hWndNewFileNewLine;
   int i;
 
+  if (ThemeDialogMessage(hDlg, uMsg, wParam)) return TRUE;
+
   if (uMsg == WM_INITDIALOG)
   {
+    ApplyThemeToDialog(hDlg);
     hWndPropGeneral=hDlg;
     hWndCommand=GetDlgItem(hDlg, IDC_OPTIONS_EXECCOM);
     hWndDirectory=GetDlgItem(hDlg, IDC_OPTIONS_EXECDIR);
@@ -15870,9 +15880,11 @@ BOOL CALLBACK OptionsRegistryDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
   static HWND hWndAssociatePrint;
   BOOL bState;
 
+  if (ThemeDialogMessage(hDlg, uMsg, wParam)) return TRUE;
   if (uMsg == WM_INITDIALOG)
   {
     hWndPropRegistry=hDlg;
+    ApplyThemeToDialog(hDlg);
     hWndSaveSettingsRegistry=GetDlgItem(hDlg, IDC_OPTIONS_SAVESETTINGS_REGISTRY);
     hWndSaveSettingsINI=GetDlgItem(hDlg, IDC_OPTIONS_SAVESETTINGS_INI);
     hWndSaveHistoryRegistry=GetDlgItem(hDlg, IDC_OPTIONS_SAVEHISTORY_REGISTRY);
@@ -16147,9 +16159,11 @@ BOOL CALLBACK OptionsEditor1DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
   static HWND hWndLineGapSpin;
   BOOL bState;
 
+  if (ThemeDialogMessage(hDlg, uMsg, wParam)) return TRUE;
   if (uMsg == WM_INITDIALOG)
   {
     hWndPropEditor1=hDlg;
+    ApplyThemeToDialog(hDlg);
     hWndTabSize=GetDlgItem(hDlg, IDC_OPTIONS_TABSIZE);
     hWndTabSizeSpin=GetDlgItem(hDlg, IDC_OPTIONS_TABSIZE_SPIN);
     hWndTabSizeSpaces=GetDlgItem(hDlg, IDC_OPTIONS_TABSIZE_SPACES);
@@ -16362,9 +16376,11 @@ BOOL CALLBACK OptionsEditor2DlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM 
   static HWND hWndWrapDelimiters;
   BOOL bState;
 
+  if (ThemeDialogMessage(hDlg, uMsg, wParam)) return TRUE;
   if (uMsg == WM_INITDIALOG)
   {
     hWndPropEditor2=hDlg;
+    ApplyThemeToDialog(hDlg);
     hWndMarginSelection=GetDlgItem(hDlg, IDC_OPTIONS_MOUSELEFTMARGIN);
     hWndMouseRichEdit=GetDlgItem(hDlg, IDC_OPTIONS_MOUSERICHEDIT);
     hWndMouseDragging=GetDlgItem(hDlg, IDC_OPTIONS_MOUSEDRAGGING);
@@ -16585,9 +16601,11 @@ BOOL CALLBACK OptionsAdvancedDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
   static HWND hWndModelessSavePos;
   BOOL bState;
 
+  if (ThemeDialogMessage(hDlg, uMsg, wParam)) return TRUE;
   if (uMsg == WM_INITDIALOG)
   {
     hWndPropAdvanced=hDlg;
+    ApplyThemeToDialog(hDlg);
     hWndDefaultSaveExt=GetDlgItem(hDlg, IDC_OPTIONS_DEFAULT_SAVE_EXT);
     hWndSwitchKeybLayout=GetDlgItem(hDlg, IDC_OPTIONS_SWITCH_KEYBLAYOUT);
     hWndRememberKeybLayout=GetDlgItem(hDlg, IDC_OPTIONS_REMEMBER_KEYBLAYOUT);

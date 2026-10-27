@@ -595,15 +595,130 @@ BOOL IsDarkTheme()
   return dwLight == 0;
 }
 
+BOOL SupportsNativeDarkMode()
+{
+  HMODULE hNtDll;
+  LONG (WINAPI *pRtlGetVersion)(OSVERSIONINFOW *);
+  OSVERSIONINFOW version;
+
+  //The dark-mode exports are available starting with Windows 10 1903.
+  hNtDll=GetModuleHandleA("ntdll.dll");
+  if (!hNtDll) return FALSE;
+  pRtlGetVersion=(void *)GetProcAddress(hNtDll, "RtlGetVersion");
+  if (!pRtlGetVersion) return FALSE;
+  xmemset(&version, 0, sizeof(version));
+  version.dwOSVersionInfoSize=sizeof(version);
+  if (pRtlGetVersion(&version) || version.dwMajorVersion < 10 || version.dwBuildNumber < 18362)
+    return FALSE;
+  return TRUE;
+}
+
+void ApplyNativeAppTheme(BOOL bDark)
+{
+  HMODULE hUxTheme;
+  int (WINAPI *pSetPreferredAppMode)(int);
+  void (WINAPI *pFlushMenuThemes)(void);
+
+  if (!SupportsNativeDarkMode()) return;
+
+  if (hUxTheme=LoadLibraryA("uxtheme.dll"))
+  {
+    pSetPreferredAppMode=(void *)GetProcAddress(hUxTheme, MAKEINTRESOURCEA(135));
+    pFlushMenuThemes=(void *)GetProcAddress(hUxTheme, MAKEINTRESOURCEA(136));
+    if (pSetPreferredAppMode) pSetPreferredAppMode(bDark?2:3);
+    if (pFlushMenuThemes) pFlushMenuThemes();
+    FreeLibrary(hUxTheme);
+  }
+}
+
+typedef struct {
+  HRESULT (WINAPI *pSetWindowTheme)(HWND, LPCWSTR, LPCWSTR);
+  BOOL (WINAPI *pAllowDarkModeForWindow)(HWND, BOOL);
+  BOOL bDark;
+} THEMEWINDOWFUNCTIONS;
+
+BOOL CALLBACK ThemeChildWindowProc(HWND hWnd, LPARAM lParam)
+{
+  THEMEWINDOWFUNCTIONS *functions=(THEMEWINDOWFUNCTIONS *)lParam;
+
+  if (functions->pAllowDarkModeForWindow)
+    functions->pAllowDarkModeForWindow(hWnd, functions->bDark);
+  if (functions->pSetWindowTheme)
+    functions->pSetWindowTheme(hWnd, functions->bDark?L"DarkMode_Explorer":NULL, NULL);
+  return TRUE;
+}
+
+void ApplyThemeToDialog(HWND hDlg)
+{
+  HMODULE hUxTheme;
+  HMODULE hDwm;
+  THEMEWINDOWFUNCTIONS functions;
+  HRESULT (WINAPI *pDwmSetWindowAttribute)(HWND, DWORD, LPCVOID, DWORD);
+
+  if (!hDlg) return;
+  functions.bDark=IsDarkTheme();
+  if (hUxTheme=LoadLibraryA("uxtheme.dll"))
+  {
+    functions.pSetWindowTheme=(void *)GetProcAddress(hUxTheme, "SetWindowTheme");
+    functions.pAllowDarkModeForWindow=SupportsNativeDarkMode()?(void *)GetProcAddress(hUxTheme, MAKEINTRESOURCEA(133)):NULL;
+    ThemeChildWindowProc(hDlg, (LPARAM)&functions);
+    EnumChildWindows(hDlg, ThemeChildWindowProc, (LPARAM)&functions);
+    FreeLibrary(hUxTheme);
+  }
+  if (hDwm=LoadLibraryA("dwmapi.dll"))
+  {
+    pDwmSetWindowAttribute=(void *)GetProcAddress(hDwm, "DwmSetWindowAttribute");
+    if (pDwmSetWindowAttribute)
+      pDwmSetWindowAttribute(hDlg, 20, &functions.bDark, sizeof(functions.bDark));
+    FreeLibrary(hDwm);
+  }
+  RedrawWindow(hDlg, NULL, NULL, RDW_INVALIDATE|RDW_ALLCHILDREN|RDW_FRAME);
+}
+
+HBRUSH ThemeDialogBrush(UINT uMsg, WPARAM wParam)
+{
+  static HBRUSH hBackground=NULL;
+  static HBRUSH hControl=NULL;
+  HDC hDC=(HDC)wParam;
+
+  if (!IsDarkTheme()) return NULL;
+  if (!hBackground) hBackground=CreateSolidBrush(RGB(32, 32, 32));
+  if (!hControl) hControl=CreateSolidBrush(RGB(45, 45, 45));
+  if (uMsg == WM_CTLCOLORDLG) return hBackground;
+  SetTextColor(hDC, RGB(230, 230, 230));
+  if (uMsg == WM_CTLCOLOREDIT || uMsg == WM_CTLCOLORLISTBOX)
+  {
+    SetBkColor(hDC, RGB(45, 45, 45));
+    return hControl;
+  }
+  SetBkMode(hDC, TRANSPARENT);
+  return hBackground;
+}
+
+BOOL ThemeDialogMessage(HWND hDlg, UINT uMsg, WPARAM wParam)
+{
+  HBRUSH hBrush;
+
+  if (uMsg != WM_CTLCOLORDLG && uMsg != WM_CTLCOLORSTATIC &&
+      uMsg != WM_CTLCOLOREDIT && uMsg != WM_CTLCOLORLISTBOX &&
+      uMsg != WM_CTLCOLORBTN)
+    return FALSE;
+  if (!(hBrush=ThemeDialogBrush(uMsg, wParam))) return FALSE;
+  SetWindowLongPtrWide(hDlg, DWLP_MSGRESULT, (UINT_PTR)hBrush);
+  return TRUE;
+}
+
 void ApplyInterfaceTheme()
 {
   HMODULE hDwm;
   HMODULE hUxTheme;
   HRESULT (WINAPI *pDwmSetWindowAttribute)(HWND, DWORD, LPCVOID, DWORD);
   HRESULT (WINAPI *pSetWindowTheme)(HWND, LPCWSTR, LPCWSTR);
+  BOOL (WINAPI *pAllowDarkModeForWindow)(HWND, BOOL);
   BOOL bDark=IsDarkTheme();
 
   if (!hMainWnd) return;
+  ApplyNativeAppTheme(bDark);
   if (hDwm=LoadLibraryA("dwmapi.dll"))
   {
     pDwmSetWindowAttribute=(void *)GetProcAddress(hDwm, "DwmSetWindowAttribute");
@@ -616,6 +731,13 @@ void ApplyInterfaceTheme()
   }
   if (hUxTheme=LoadLibraryA("uxtheme.dll"))
   {
+    pAllowDarkModeForWindow=(void *)GetProcAddress(hUxTheme, MAKEINTRESOURCEA(133));
+    if (SupportsNativeDarkMode() && pAllowDarkModeForWindow)
+    {
+      pAllowDarkModeForWindow(hMainWnd, bDark);
+      if (hStatus) pAllowDarkModeForWindow(hStatus, bDark);
+      if (hTab) pAllowDarkModeForWindow(hTab, bDark);
+    }
     pSetWindowTheme=(void *)GetProcAddress(hUxTheme, "SetWindowTheme");
     if (pSetWindowTheme)
     {
@@ -625,6 +747,8 @@ void ApplyInterfaceTheme()
     FreeLibrary(hUxTheme);
   }
   ApplyEditorTheme();
+  if (hWndPropertySheet) ApplyThemeToDialog(hWndPropertySheet);
+  DrawMenuBar(hMainWnd);
   RedrawWindow(hMainWnd, NULL, NULL, RDW_INVALIDATE|RDW_ALLCHILDREN|RDW_FRAME);
 }
 
@@ -1194,6 +1318,7 @@ EXTERN_C int WINAPI _tWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPTSTR lpCmd
 
   //Copy initial options
   xmemcpy(&moCur, &moInit, sizeof(MAINOPTIONS));
+  ApplyNativeAppTheme(IsDarkTheme());
 
   //Get common controls version
   GetFileVersionA("comctl32.dll", &nMajor, &nMinor, &nRelease, &nBuild, NULL);
