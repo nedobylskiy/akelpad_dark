@@ -2983,6 +2983,34 @@ static void RedrawWindowByDx(HWND hWnd)
     }
 }
 
+typedef struct {
+    HRESULT (WINAPI *pSetWindowTheme)(HWND, LPCWSTR, LPCWSTR);
+    BOOL (WINAPI *pAllowDarkModeForWindow)(HWND, BOOL);
+    BOOL bDark;
+} QSEARCHTHEME;
+
+static BOOL CALLBACK ThemeQSearchChild(HWND hWnd, LPARAM lParam)
+{
+    QSEARCHTHEME *theme = (QSEARCHTHEME *) lParam;
+    if ( theme->pAllowDarkModeForWindow )
+        theme->pAllowDarkModeForWindow(hWnd, theme->bDark);
+    if ( theme->pSetWindowTheme )
+        theme->pSetWindowTheme(hWnd, theme->bDark ? L"DarkMode_Explorer" : NULL, NULL);
+    return TRUE;
+}
+
+static void ThemeQSearchControls(HWND hDlg)
+{
+    HMODULE hUxTheme = LoadLibraryA("uxtheme.dll");
+    QSEARCHTHEME theme;
+    if ( !hUxTheme ) return;
+    theme.bDark = (BOOL) SendMessage(g_Plugin.hMainWnd, AKD_GETMAININFO, MI_DARKMODE, 0);
+    theme.pSetWindowTheme = (void *) GetProcAddress(hUxTheme, "SetWindowTheme");
+    theme.pAllowDarkModeForWindow = (void *) GetProcAddress(hUxTheme, MAKEINTRESOURCEA(133));
+    EnumChildWindows(hDlg, ThemeQSearchChild, (LPARAM) &theme);
+    FreeLibrary(hUxTheme);
+}
+
 INT_PTR CALLBACK qsearchDlgProc(HWND hDlg,
   UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
@@ -3023,6 +3051,7 @@ INT_PTR CALLBACK qsearchDlgProc(HWND hDlg,
     {
         case WM_THEMECHANGED:
         {
+            ThemeQSearchControls(hDlg);
             RedrawWindow(hDlg, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE);
             break;
         }
@@ -3927,6 +3956,8 @@ INT_PTR CALLBACK qsearchDlgProc(HWND hDlg,
         case WM_INITDIALOG:
         {
             HWND hDlgItm;
+
+            ThemeQSearchControls(hDlg);
 
             InitializeCriticalSection(&csFindAllTimerId);
 

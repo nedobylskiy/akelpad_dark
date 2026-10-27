@@ -782,6 +782,8 @@ void ApplyInterfaceTheme()
   }
   if (hUxTheme=LoadLibraryA("uxtheme.dll"))
   {
+    THEMEWINDOWFUNCTIONS functions;
+
     pAllowDarkModeForWindow=(void *)GetProcAddress(hUxTheme, MAKEINTRESOURCEA(133));
     if (SupportsNativeDarkMode() && pAllowDarkModeForWindow)
     {
@@ -795,6 +797,10 @@ void ApplyInterfaceTheme()
       if (hStatus) pSetWindowTheme(hStatus, bDark?L"DarkMode_Explorer":NULL, NULL);
       if (hTab) pSetWindowTheme(hTab, bDark?L"DarkMode_Explorer":NULL, NULL);
     }
+    functions.pAllowDarkModeForWindow=SupportsNativeDarkMode()?pAllowDarkModeForWindow:NULL;
+    functions.pSetWindowTheme=pSetWindowTheme;
+    functions.bDark=bDark;
+    EnumChildWindows(hMainWnd, ThemeChildWindowProc, (LPARAM)&functions);
     FreeLibrary(hUxTheme);
   }
   ApplyEditorTheme();
